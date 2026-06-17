@@ -1,0 +1,5704 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "geomap",
+      "name": "Geomap",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "barchart",
+      "name": "Bar chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "logs",
+      "name": "Logs",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "Home IDS \u2014 Full threat, anomaly, malware and geo-risk dashboard",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "\ud83d\udd34 IDS Health & System Status",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "title": "ML Model Status",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_ml_model_loaded",
+          "legendFormat": "ML Model",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NOT LOADED",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "LOADED",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d32f2f",
+                "value": null
+              },
+              {
+                "color": "#1a9641",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "id": 2,
+      "title": "Collector Lag",
+      "type": "stat",
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_collector_lag_seconds",
+          "legendFormat": "Lag (s)"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "orange",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Alert Queue",
+      "type": "stat",
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_alert_queue_size",
+          "legendFormat": "Queue"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "orange",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 40
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Alerts Fired (last 1h)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "increase(home_ids_alerts_total[1h])",
+          "legendFormat": "Alerts/hr",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 2
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 10
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 9,
+        "y": 1
+      }
+    },
+    {
+      "id": 5,
+      "title": "Events Processed / min",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_events_processed_total[2m]) * 60",
+          "legendFormat": "Events/min",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d32f2f",
+                "value": null
+              },
+              {
+                "color": "#1a9641",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 12,
+        "y": 1
+      }
+    },
+    {
+      "id": 6,
+      "title": "Active Devices",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "count(home_ids_risk_score) or vector(0)",
+          "legendFormat": "Devices",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 15,
+        "y": 1
+      }
+    },
+    {
+      "id": 7,
+      "title": "Devices at Risk (score \u2265 6)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "count(home_ids_risk_score >= 6) or vector(0)",
+          "legendFormat": "At Risk",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 1
+              },
+              {
+                "color": "#f97316",
+                "value": 3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 18,
+        "y": 1
+      }
+    },
+    {
+      "id": 8,
+      "title": "Collector Lag \u2014 30m trend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 21,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_collector_lag_seconds",
+          "legendFormat": "lag"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 101,
+      "title": "\ud83d\udea8 Risk Overview \u2014 All Devices",
+      "type": "row"
+    },
+    {
+      "id": 10,
+      "title": "Risk Score \u2014 All Devices",
+      "type": "gauge",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_risk_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} ({{device_type}})"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true,
+        "minVizHeight": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": []
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Risk Score Timeline \u2014 Per Device",
+      "description": "Time-series risk for every device. Threshold lines at 6 (alert) and 8 (critical).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_risk_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "transformations": [],
+      "alert": {
+        "alertRuleTags": {},
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                6
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "1m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "2m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "Device risk score exceeded 6.0",
+        "name": "High Risk Score Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 102,
+      "title": "\ud83d\udce1 DNS Behaviour \u2014 Query Rates & Anomalies",
+      "type": "row"
+    },
+    {
+      "id": 20,
+      "title": "DNS Query Rate / min \u2014 Per Device",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_query_rate{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 60
+              },
+              {
+                "color": "#f97316",
+                "value": 150
+              },
+              {
+                "color": "#d32f2f",
+                "value": 300
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Z-Scores \u2014 Anomaly Detector (Query Rate, NXDOMAIN, Blocked)",
+      "description": "z-score > 3 = statistically anomalous for that device. Now includes NXDOMAIN and Blocked ratio z-scores. New: even a device with 2% NXDOMAIN baseline shows a spike if it suddenly hits 15%.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_query_rate{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        },
+        {
+          "expr": "home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} NXDOMAIN-z",
+          "refId": "B"
+        },
+        {
+          "expr": "home_ids_zscore_blocked_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} Blocked-z",
+          "refId": "C"
+        },
+        {
+          "expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} DGA-z",
+          "refId": "D"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Unique Domains per Window",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_unique_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 100
+              },
+              {
+                "color": "#f97316",
+                "value": 250
+              },
+              {
+                "color": "#d32f2f",
+                "value": 500
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Unique Domain Z-Score",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_unique_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 24,
+      "title": "Blocked DNS Ratio",
+      "description": "Ratio of DNS queries blocked by Pi-hole per device. High ratio may indicate malware trying known-bad domains.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_blocked_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.1
+              },
+              {
+                "color": "#f97316",
+                "value": 0.2
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.4
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 103,
+      "title": "\ud83e\udda0 Malware & DGA Detection",
+      "type": "row"
+    },
+    {
+      "id": 30,
+      "title": "NXDOMAIN Ratio \u2014 DGA / Malware Indicator",
+      "description": "DGA malware generates many non-existent domains. Ratio > 0.3 is suspicious. > 0.5 is high confidence malware.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_nxdomain_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.15
+              },
+              {
+                "color": "#f97316",
+                "value": 0.3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.5
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0.3
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "2m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "3m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "NXDOMAIN ratio exceeded 0.3 \u2014 possible DGA malware",
+        "name": "NXDOMAIN Spike Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "id": 31,
+      "title": "Suspicious / DGA-Like Domains \u2014 Count",
+      "description": "Count of domains flagged by the DGA heuristic (high entropy label, low vowel ratio, len > 18). Each dot is a potential malware domain.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_suspicious_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "bars",
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 10
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                5
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "2m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "2m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "DGA suspicious domain count > 5 \u2014 possible malware C2",
+        "name": "DGA Domain Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "id": 32,
+      "title": "DNS Entropy \u2014 Per Device",
+      "description": "Average Shannon entropy of queried domain labels. Normal browsing: 2.5\u20133.2. DGA malware: > 3.7. Encrypted/tunnelled DNS: > 4.0.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_entropy_avg{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 5,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3.2
+              },
+              {
+                "color": "#f97316",
+                "value": 3.7
+              },
+              {
+                "color": "#d32f2f",
+                "value": 4.0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 33,
+      "title": "Entropy Z-Score & DGA Domain Z-Score",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_entropy{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        },
+        {
+          "expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} DGA-z",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 104,
+      "title": "\ud83e\udd16 ML Anomaly Detection",
+      "type": "row"
+    },
+    {
+      "id": 40,
+      "title": "ML Anomaly Score \u2014 IsolationForest",
+      "description": "Scores > 0 indicate anomalous behaviour. > 0.3 = suspicious. > 0.5 = strong anomaly. Score is learned per-device \u2014 same score means different things for a phone vs a NAS.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.05
+              },
+              {
+                "color": "#f97316",
+                "value": 0.15
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.35
+              }
+            ]
+          },
+          "min": -0.5,
+          "max": 0.5
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0.4
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "2m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "3m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "ML anomaly score exceeded 0.4 \u2014 IsolationForest flagging unusual behaviour",
+        "name": "ML Anomaly Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "id": 41,
+      "title": "Current ML Anomaly Score",
+      "type": "gauge",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": -0.5,
+          "max": 0.5,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.05
+              },
+              {
+                "color": "#f97316",
+                "value": 0.15
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.35
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 85
+      },
+      "id": 108,
+      "title": "\ud83d\udccb Device Summary Table",
+      "type": "row"
+    },
+    {
+      "id": 80,
+      "title": "All Devices \u2014 Current Status",
+      "description": "Full per-device snapshot. Sorted by Risk score. Rows colour by threshold.",
+      "type": "table",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 86
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_risk_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "expr": "home_ids_query_rate{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "B"
+        },
+        {
+          "expr": "home_ids_nxdomain_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "C"
+        },
+        {
+          "expr": "home_ids_blocked_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "D"
+        },
+        {
+          "expr": "home_ids_entropy_avg{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "E"
+        },
+        {
+          "expr": "home_ids_suspicious_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "F"
+        },
+        {
+          "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "G"
+        },
+        {
+          "expr": "home_ids_unique_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "H"
+        },
+        {
+          "expr": "home_ids_new_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "I"
+        },
+        {
+          "expr": "home_ids_deep_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "J"
+        },
+        {
+          "expr": "home_ids_risk_velocity{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "K"
+        },
+        {
+          "expr": "home_ids_ti_risk{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "L"
+        },
+        {
+          "expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "M"
+        },
+        {
+          "expr": "home_ids_zeek_suspicious_ports{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}",
+          "instant": true,
+          "format": "table",
+          "refId": "N"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "hostname",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "hostname": "Hostname",
+              "device_type": "Type",
+              "Value #A": "Risk",
+              "Value #B": "Queries/min",
+              "Value #C": "NXDOMAIN%",
+              "Value #D": "Blocked%",
+              "Value #E": "Entropy",
+              "Value #F": "DGA Domains",
+              "Value #G": "ML Score",
+              "Value #H": "Unique Domains",
+              "Value #I": "New Domains",
+              "Value #J": "Deep Domains",
+              "Value #K": "Risk Velocity",
+              "Value #L": "TI Risk",
+              "Value #M": "JA3 Hits",
+              "Value #N": "Susp Ports"
+            },
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "device": true,
+              "device 1": true,
+              "device 2": true,
+              "device 3": true,
+              "device 4": true,
+              "device 5": true,
+              "device 6": true,
+              "device 7": true,
+              "device 8": true,
+              "__name__": true,
+              "device_type 1": true,
+              "device_type 2": true,
+              "device_type 3": true,
+              "device_type 4": true,
+              "device_type 5": true,
+              "device_type 6": true,
+              "device_type 7": true,
+              "device_type 8": true,
+              "9": true,
+              "Time 9": true,
+              "device 9": true,
+              "device_type 9": true,
+              "10": true,
+              "Time 10": true,
+              "device 10": true,
+              "device_type 10": true,
+              "11": true,
+              "Time 11": true,
+              "device 11": true,
+              "device_type 11": true,
+              "I": true,
+              "Time I": true,
+              "device I": true,
+              "device_type I": true,
+              "J": true,
+              "Time J": true,
+              "device J": true,
+              "device_type J": true,
+              "K": true,
+              "Time K": true,
+              "device K": true,
+              "device_type K": true,
+              "Time Time 9": true,
+              "device Time 9": true,
+              "device_type Time 9": true,
+              "Time Time 10": true,
+              "device Time 10": true,
+              "device_type Time 10": true,
+              "Time Time 11": true,
+              "device Time 11": true,
+              "device_type Time 11": true,
+              "Time device 9": true,
+              "device device 9": true,
+              "device_type device 9": true,
+              "Time device 10": true,
+              "device device 10": true,
+              "device_type device 10": true,
+              "Time device 11": true,
+              "device device 11": true,
+              "device_type device 11": true,
+              "Time device_type 9": true,
+              "device device_type 9": true,
+              "device_type device_type 9": true,
+              "Time device_type 10": true,
+              "device device_type 10": true,
+              "device_type device_type 10": true,
+              "Time device_type 11": true,
+              "device device_type 11": true,
+              "device_type device_type 11": true
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": [
+              {
+                "displayName": "Risk",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Risk",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center",
+            "minWidth": 80
+          },
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Hostname"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "custom.align",
+                "value": "left"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Risk"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 3
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 6
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 8
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Queries/min"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "NXDOMAIN%"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.15
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 0.3
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 0.5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blocked%"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.1
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 0.2
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 0.4
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Entropy"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 3.2
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 3.7
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 4.0
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DGA Domains"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 3
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 6
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ML Score"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.2
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 0.35
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 0.5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unique Domains"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "New Domains"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 10
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 20
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Deep Domains"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 2
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Risk Velocity"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 2
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 3
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TI Risk"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 2
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 3.5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JA3 Hits"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 0.5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Susp Ports"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 2
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 5
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 98
+      },
+      "id": 109,
+      "title": "\ud83d\udd2c IDS Script Self-Test \u2014 Is It Actually Working?",
+      "type": "row"
+    },
+    {
+      "id": 90,
+      "title": "Scoring Engine Output (risk > 0 = working)",
+      "description": "If 0.0 the scorer has no data yet or baselines are cold. Any non-zero value confirms the risk engine is running. ML score stays 0.0 until 5,000 samples per device are collected (~21 min at 8 devices).",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 99
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "max(home_ids_risk_score{hostname=~\"$device\"})",
+          "legendFormat": "Max Risk"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 91,
+      "title": "ML Engine Output (non-zero = working)",
+      "description": "IsolationForest score. Will be 0.0 until warmup (5000 samples). Any non-zero value confirms ML scoring is running.",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 99
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "max(home_ids_ml_anomaly_score{hostname=~\"$device\"})",
+          "legendFormat": "Max ML Score"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.001
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 92,
+      "title": "Events Ingested/min \u2014 Poll Loop Live",
+      "description": "Rate of DNS events ingested from Pi-hole. 0 means the poll loop has stalled or Pi-hole has no new queries.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_events_processed_total[2m]) * 60",
+          "legendFormat": "events/min",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d32f2f",
+                "value": null
+              },
+              {
+                "color": "#1a9641",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 99
+      }
+    },
+    {
+      "id": 93,
+      "title": "Alerts Fired \u2014 Pipeline End-to-End",
+      "description": "Alert rate over time. Flat zero on a busy network = threshold too high or pipeline broken.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_alerts_total[5m]) * 300",
+          "legendFormat": "alerts / 5min",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#f97316"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 99
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 103
+      },
+      "id": 110,
+      "title": "\ud83d\udcf1 Risk by Device Type",
+      "type": "row"
+    },
+    {
+      "id": 94,
+      "title": "Max Risk Score by Device Type",
+      "description": "Worst current risk score per device category. Helps spot an entire device class being targeted (e.g. all IoT devices beaconing).",
+      "type": "barchart",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 104
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "max by (device_type) (home_ids_risk_score)",
+          "legendFormat": "{{device_type}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "xField": "device_type"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 95,
+      "title": "Average NXDOMAIN Ratio by Device Type",
+      "description": "IoT and phone device types with high NXDOMAIN ratios are strong malware indicators \u2014 these devices have limited legitimate reasons to query non-existent domains.",
+      "type": "barchart",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 104
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "avg by (device_type) (home_ids_nxdomain_ratio)",
+          "legendFormat": "{{device_type}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.15
+              },
+              {
+                "color": "#f97316",
+                "value": 0.3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 126
+      },
+      "id": 200,
+      "title": "\ud83c\udf0d Global Threat Map \u2014 Risk by Destination",
+      "type": "row"
+    },
+    {
+      "id": 201,
+      "title": "Destination Risk Map \u2014 Bubble = Query Volume, Colour = Risk",
+      "description": "Each bubble is a destination seen in DNS traffic. Size = query volume. Colour = risk score. Requires GeoIP lat/lon labels. Hover for country, city, ASN.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 16,
+        "w": 16,
+        "x": 0,
+        "y": 127
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_geo_risk",
+          "legendFormat": "{{country}} / {{city}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            },
+            "renameByName": {
+              "latitude": "latitude",
+              "longitude": "longitude"
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Destination Risk Map \u2014 Bubble = Query Volume, Colour = Risk",
+            "config": {
+              "style": {
+                "size": {
+                  "field": "Value",
+                  "min": 5,
+                  "max": 40,
+                  "fixed": 8
+                },
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "fillOpacity": 0.65
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 6
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "latitude"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": false,
+                  "legend": true,
+                  "tooltip": false
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "longitude"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": false,
+                  "legend": true,
+                  "tooltip": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 202,
+      "title": "Threat Density by Country",
+      "description": "Countries shaded by cumulative risk score from their infrastructure. Red = high ongoing threat.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 16,
+        "w": 8,
+        "x": 16,
+        "y": 127
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_country_threat_density",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns",
+            "valueLabel": "Value"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "country": "country",
+              "Value": "Value"
+            },
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Threat Density by Country",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 2
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 143
+      },
+      "id": 210,
+      "title": "\ud83d\udcca DNS Traffic Volume by Geography",
+      "type": "row"
+    },
+    {
+      "id": 211,
+      "title": "DNS Query Rate by Location \u2014 Bubble Size = Queries/min",
+      "description": "Where your DNS queries are going. Large bubbles = high query rate. Orange/red = unusually high traffic to that location.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 14,
+        "w": 16,
+        "x": 0,
+        "y": 144
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_geo_queries_per_minute",
+          "legendFormat": "{{country}} / {{city}} ({{asn}})",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            },
+            "renameByName": {
+              "latitude": "latitude",
+              "longitude": "longitude"
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "DNS Query Rate by Location \u2014 Bubble Size = Queries/min",
+            "config": {
+              "style": {
+                "size": {
+                  "field": "Value",
+                  "min": 4,
+                  "max": 35,
+                  "fixed": 8
+                },
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "fillOpacity": 0.65
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 30
+              },
+              {
+                "color": "#f97316",
+                "value": 100
+              },
+              {
+                "color": "#d32f2f",
+                "value": 300
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "latitude"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": false,
+                  "legend": true,
+                  "tooltip": false
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "longitude"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "viz": false,
+                  "legend": true,
+                  "tooltip": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 212,
+      "title": "Total DNS Traffic by Country",
+      "description": "Cumulative DNS query count shaded by country. Unexpected high-traffic countries warrant investigation.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 14,
+        "w": 8,
+        "x": 16,
+        "y": 144
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (country) (increase(home_ids_geo_traffic_total[1h]))",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns",
+            "valueLabel": "Value"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "country": "country",
+              "Value": "Value"
+            },
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Total DNS Traffic by Country",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 500
+              },
+              {
+                "color": "#f97316",
+                "value": 2000
+              },
+              {
+                "color": "#d32f2f",
+                "value": 10000
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 158
+      },
+      "id": 220,
+      "title": "\ud83d\udce1 Beaconing \u2014 C2 Destination Map",
+      "type": "row"
+    },
+    {
+      "id": 221,
+      "title": "Beaconing Destinations \u2014 Countries Receiving C2 Traffic",
+      "description": "Countries shaded by total beaconing detections. Any non-expected country lit up here is a potential C2 channel.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 14,
+        "w": 16,
+        "x": 0,
+        "y": 159
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (country) (increase(home_ids_geo_beaconing_total[1h]))",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns",
+            "valueLabel": "Value"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "country": "country",
+              "Value": "Value"
+            },
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Beaconing Destinations \u2014 Countries Receiving C2 Traffic",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 1
+              },
+              {
+                "color": "#f97316",
+                "value": 10
+              },
+              {
+                "color": "#d32f2f",
+                "value": 30
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 222,
+      "title": "Beaconing Rate \u2014 Timeline by Country/ASN",
+      "description": "Beaconing detections per 5 min. A line that never drops to zero = persistent C2 keep-alive. Alert fires at > 5 events per 5 min.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 159
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_geo_beaconing_total[5m]) * 300",
+          "legendFormat": "{{country}} / {{asn}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                5
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "5m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "sum"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "5m",
+        "frequency": "1m",
+        "handler": 1,
+        "message": "Beaconing to foreign destination \u2014 possible C2",
+        "name": "Beaconing C2 Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "id": 223,
+      "title": "Top Beaconing ASNs",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 166
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "topk(10, increase(home_ids_geo_beaconing_total[1h]))",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns",
+            "valueLabel": "Value"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "country": "Country",
+              "asn": "ASN",
+              "Value": "Beacons"
+            },
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": [
+              {
+                "displayName": "Beacons",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Beacons"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#1a9641",
+                      "value": null
+                    },
+                    {
+                      "color": "#f4e537",
+                      "value": 5
+                    },
+                    {
+                      "color": "#f97316",
+                      "value": 20
+                    },
+                    {
+                      "color": "#d32f2f",
+                      "value": 50
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 173
+      },
+      "id": 230,
+      "title": "\ud83e\udda0 DGA / Entropy Risk by Geography",
+      "type": "row"
+    },
+    {
+      "id": 231,
+      "title": "DNS Entropy by Country \u2014 DGA & Tunnelling Risk",
+      "description": "Countries shaded by avg DNS query entropy. High entropy to specific countries = DGA malware or DNS tunnelling exfiltration. Normal: 2.5\u20133.2. Suspicious: > 3.7.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 174
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "avg by (country) (home_ids_geo_entropy)",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "DNS Entropy by Country \u2014 DGA & Tunnelling Risk",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3.2
+              },
+              {
+                "color": "#f97316",
+                "value": 3.7
+              },
+              {
+                "color": "#d32f2f",
+                "value": 4.0
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 232,
+      "title": "Unique Domain Count by Country",
+      "description": "Countries shaded by unique domain count. High unique domains to unusual countries = C2 domain rotation or exfiltration probing.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 174
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (country) (home_ids_geo_unique_domains)",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Unique Domain Count by Country",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 50
+              },
+              {
+                "color": "#f97316",
+                "value": 200
+              },
+              {
+                "color": "#d32f2f",
+                "value": 500
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 186
+      },
+      "id": 240,
+      "title": "\ud83c\udfaf Geo Threat Hits & Device Reach",
+      "type": "row"
+    },
+    {
+      "id": 241,
+      "title": "Threat Hit Density by Country",
+      "description": "Countries shaded by cumulative threat hits \u2014 DNS queries that triggered risk scoring. Sustained red = active threat source country.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 187
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (country) (home_ids_geo_hits_total)",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Threat Hit Density by Country",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 10
+              },
+              {
+                "color": "#f97316",
+                "value": 50
+              },
+              {
+                "color": "#d32f2f",
+                "value": 200
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 242,
+      "title": "Device Reach \u2014 How Many Devices Communicate with Each Country",
+      "description": "Countries shaded by number of your devices talking to them. An unexpected country with many devices = potential mass compromise or supply-chain C2.",
+      "type": "geomap",
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 187
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (country) (home_ids_geo_device_count)",
+          "legendFormat": "{{country}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "Value",
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 20,
+          "lon": 10,
+          "zoom": 1
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": true,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "choropleth",
+            "name": "Device Reach \u2014 How Many Devices Communicate with Each Country",
+            "config": {
+              "style": {
+                "color": {
+                  "field": "Value",
+                  "fixed": "blue"
+                },
+                "opacity": 0.75
+              },
+              "showLegend": true
+            },
+            "location": {
+              "mode": "lookup",
+              "gazetteer": "public/maps/countries.geojson",
+              "lookup": "country"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 7
+              },
+              {
+                "color": "#d32f2f",
+                "value": 15
+              }
+            ]
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 243,
+      "title": "Threat Hits Timeline \u2014 Rate per Country",
+      "description": "Rate of high-risk DNS queries per country over time. A country that suddenly appears and stays is an active campaign.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 199
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_geo_hits_total[10m]) * 600",
+          "legendFormat": "{{country}} / {{asn}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum",
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 207
+      },
+      "id": 300,
+      "title": "\u26a1 Risk Velocity \u2014 Sudden Spike Detection",
+      "type": "row"
+    },
+    {
+      "id": 301,
+      "title": "Risk Velocity \u2014 Z-Score of Risk vs Device Baseline",
+      "description": "How fast the risk score is rising relative to that device's normal risk level. A device going from 0\u21927 in one cycle shows high velocity even if 7 isn't a record. Z-score > 3 = sudden spike. More alarming than a stable high score.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 208
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_risk_velocity{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 2
+              },
+              {
+                "color": "#f97316",
+                "value": 3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 302,
+      "title": "Current Risk Velocity",
+      "type": "gauge",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 208
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_risk_velocity{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": -1,
+          "max": 8,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 2
+              },
+              {
+                "color": "#f97316",
+                "value": 3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 216
+      },
+      "id": 310,
+      "title": "\ud83c\udd95 New Domain Burst & DNS Tunnelling Detection",
+      "type": "row"
+    },
+    {
+      "id": 311,
+      "title": "New Domains / Window \u2014 First-Seen Domain Rate",
+      "description": "Domains appearing for the first time ever from this device. DGA generates hundreds of never-before-seen domains per cycle. Normal browsing revisits the same CDNs. > 20 new domains in 5 min = DGA burst signal.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 217
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_new_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 10
+              },
+              {
+                "color": "#f97316",
+                "value": 20
+              },
+              {
+                "color": "#d32f2f",
+                "value": 50
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 312,
+      "title": "Deep DNS Domains \u2014 Label Count > 5 (Tunnelling Indicator)",
+      "description": "Domains with more than 5 DNS labels: a.b.c.d.e.attacker.com. Legitimate domains rarely exceed 4 labels. DNS tunnelling encodes exfiltrated data as subdomains. Any non-zero value here warrants immediate investigation.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 217
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_deep_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.5
+              },
+              {
+                "color": "#f97316",
+                "value": 2
+              },
+              {
+                "color": "#d32f2f",
+                "value": 5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 224
+      },
+      "id": 320,
+      "title": "\ud83c\udfaf DGA Family Fingerprint \u2014 NXDOMAIN TLD Concentration",
+      "type": "row"
+    },
+    {
+      "id": 321,
+      "title": "NXDOMAIN TLD Concentration \u2014 DGA Family Signal",
+      "description": "Fraction of all DNS traffic going to the single most-queried TLD. DGA families generate all variants under one TLD (.ru, .xyz, .cc). Combined with high NXDOMAIN ratio: > 0.7 = near-certain DGA family pattern. Legitimate browsing distributes across .com .net .org .io etc.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 0,
+        "y": 225
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.5
+              },
+              {
+                "color": "#f97316",
+                "value": 0.7
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.85
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 322,
+      "title": "TLD Concentration \u00d7 NXDOMAIN \u2014 Combined DGA Score",
+      "description": "Product of TLD concentration and NXDOMAIN ratio. Both high simultaneously = strong DGA family fingerprint. Alert fires when product > 0.2 (e.g. 0.7 conc \u00d7 0.3 nx).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 225
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_nxdomain_tld_concentration{hostname=~\"$device\"} * home_ids_nxdomain_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}} conc\u00d7nx"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.1
+              },
+              {
+                "color": "#f97316",
+                "value": 0.2
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.35
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0.2
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "3m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "3m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "DGA family fingerprint: high TLD concentration \u00d7 NXDOMAIN ratio",
+        "name": "DGA Family Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 232
+      },
+      "id": 330,
+      "title": "\ud83d\udcca Baseline Z-Scores \u2014 NXDOMAIN, Blocked, DGA (Per-Device)",
+      "type": "row"
+    },
+    {
+      "id": 331,
+      "title": "NXDOMAIN Ratio Z-Score \u2014 Per-Device Baseline Deviation",
+      "description": "How anomalous the current NXDOMAIN ratio is vs this device's own history. A device with 0% baseline hitting 3% shows z=15 even though 3% is below the absolute 30% threshold. Per-device baselines catch low-and-slow DGA.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 233
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 332,
+      "title": "Blocked Ratio Z-Score \u2014 Sudden Pi-Hole Block Spike",
+      "description": "Z-score of blocked DNS ratio vs device baseline. A device that normally has 0% blocked suddenly hitting 10% blocked means it's trying to reach domains Pi-hole knows are malicious.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 233
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_blocked_ratio{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 333,
+      "title": "DGA Domain Count Z-Score \u2014 Suspicious Domain Burst",
+      "description": "Z-score of suspicious/DGA-like domain count vs device baseline. Even 2 DGA domains from a device that normally sees 0 shows a high z-score, catching early-stage infections before the absolute count threshold fires.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 233
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 3
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 241
+      },
+      "id": 400,
+      "title": "\ud83d\udee1\ufe0f Threat Intelligence \u2014 Live IOC Matching",
+      "type": "row"
+    },
+    {
+      "id": 401,
+      "title": "TI Risk Score \u2014 Live IOC Match Contribution",
+      "description": "Direct match against Feodo/URLhaus/ThreatFox/OTX/AbuseIPDB/VirusTotal. Any non-zero value means a domain or IP from this device is in a live TI feed. Value = confidence \u00d7 4.0. Bypasses the normal 2-signal gate.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 0,
+        "y": 242
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_ti_risk{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "line"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.5
+              },
+              {
+                "color": "#f97316",
+                "value": 2
+              },
+              {
+                "color": "#d32f2f",
+                "value": 3.5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 402,
+      "title": "Active TI Matches \u2014 Devices with Known IOC",
+      "description": "Count of devices currently matching a threat intel feed.",
+      "type": "stat",
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 16,
+        "y": 242
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "count(home_ids_ti_match > 0) or vector(0)",
+          "legendFormat": "{{hostname}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 1
+              },
+              {
+                "color": "#f97316",
+                "value": 3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 403,
+      "title": "TI IOC Hits \u2014 Rate by Feed Source",
+      "description": "Cumulative IOC hits per feed. Feodo=botnet C2, URLhaus=malware domains, AbuseIPDB=reported IPs, VT=cross-vendor validation.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 20,
+        "y": 242
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(home_ids_ti_ioc_hits_total[5m])*300",
+          "legendFormat": "{{source}} / {{ioc_type}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 1
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 20
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 249
+      },
+      "id": 410,
+      "title": "\ud83d\udd78\ufe0f Zeek Network Signals \u2014 Direct IP & TLS Detection",
+      "type": "row"
+    },
+    {
+      "id": 411,
+      "title": "\ud83d\udd34 Malicious JA3 TLS Fingerprint \u2014 Known Malware TLS Stack",
+      "description": "JA3 fingerprint matches known-bad TLS implementations: Cobalt Strike, Metasploit, Dridex, Trickbot, Sliver C2, Havoc C2. Any non-zero value here is near-certain malware. Investigate immediately.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 250
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 3,
+            "fillOpacity": 30,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#d32f2f"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#d32f2f",
+                "value": 0.5
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "1m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "max"
+            },
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "0m",
+        "frequency": "30s",
+        "handler": 1,
+        "message": "CRITICAL: Malicious JA3 TLS fingerprint detected \u2014 known malware C2 stack",
+        "name": "Malicious JA3 Alert",
+        "noDataState": "no_data"
+      }
+    },
+    {
+      "id": 412,
+      "title": "Suspicious Port Connections (4444, 31337, IRC etc)",
+      "description": "Outbound connections to ports commonly used by malware: 4444/4445 (Metasploit), 31337 (Elite backdoor), 6667/6697 (IRC C2), 1080 (SOCKS proxy). Any sustained traffic here warrants investigation.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 250
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zeek_suspicious_ports{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 0.5
+              },
+              {
+                "color": "#f97316",
+                "value": 3
+              },
+              {
+                "color": "#d32f2f",
+                "value": 8
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 413,
+      "title": "Direct IP Connections \u2014 Unique Destinations (Zeek conn.log)",
+      "description": "Unique destination IPs contacted directly without DNS lookup. Malware often hard-codes C2 server IPs to bypass DNS-based detection. Pi-hole cannot see these \u2014 only Zeek can.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 257
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zeek_new_ips{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "line"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 10
+              },
+              {
+                "color": "#f97316",
+                "value": 30
+              },
+              {
+                "color": "#d32f2f",
+                "value": 100
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 414,
+      "title": "Zeek Protocol Notices & Anomalies",
+      "description": "Events from Zeek's notice.log and weird.log \u2014 Zeek's own protocol anomaly detection running in parallel with the IDS. Includes: scan detection, invalid certificates, protocol violations.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 257
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_zeek_notices{hostname=~\"$device\"}",
+          "legendFormat": "{{hostname}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#1a9641",
+                "value": null
+              },
+              {
+                "color": "#f4e537",
+                "value": 1
+              },
+              {
+                "color": "#f97316",
+                "value": 5
+              },
+              {
+                "color": "#d32f2f",
+                "value": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 264
+      },
+      "id": 420,
+      "title": "\u2705 Safe List & Infrastructure Devices",
+      "type": "row"
+    },
+    {
+      "id": 421,
+      "title": "Safe-Listed Devices \u2014 Excluded from Scoring",
+      "description": "Devices in the safe_ips list (config.json) are excluded at the Pi-hole SQL query level \u2014 they never enter the scoring loop. Pi-hole server and router must be here. safe_device=1 means the device is excluded. If you see Pi-hole or your router in the risk panels, add their IP to safe_ips.",
+      "type": "table",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 265
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "home_ids_safe_device",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "hostname": "Hostname",
+              "device_type": "Type",
+              "client_ip": "IP",
+              "Value": "Safe"
+            },
+            "excludeByName": {
+              "Time": true,
+              "device": true,
+              "__name__": true
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Safe"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "SAFE \u2705",
+                        "color": "green"
+                      },
+                      "0": {
+                        "text": "MONITORED",
+                        "color": "blue"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "home-ids",
+    "security",
+    "dns",
+    "threat"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(home_ids_risk_score, hostname)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "device",
+        "options": [],
+        "query": {
+          "query": "label_values(home_ids_risk_score, hostname)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "label": "Device",
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(home_ids_risk_score, device_type)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "device_type",
+        "options": [],
+        "query": {
+          "query": "label_values(home_ids_risk_score, device_type)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "label": "Device Type",
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Home IDS \u2014 Network Threat & Anomaly Detection",
+  "uid": "home-ids-v2",
+  "version": 1
+}
