@@ -207,7 +207,6 @@ alerts_total = Counter(
 
 # ══════════════════════════════════════════════════════════════════════════
 # NEW DETECTION SIGNAL METRICS
-# Added to match imports in main.py — were missing causing ImportError
 # ══════════════════════════════════════════════════════════════════════════
 
 _DEV_LABELS = ["device", "hostname", "device_type"]
@@ -273,13 +272,20 @@ ti_match_metric = Gauge(
 ti_ioc_hits_total = Counter(
     "home_ids_ti_ioc_hits_total",
     "Total IOC matches from all TI feeds",
-    ["source", "ioc_type"],   # e.g. source=feodo/urlhaus/abuseipdb, ioc_type=ip/domain
+    ["source", "ioc_type"],   
 )
 
 # ── Safe list ──────────────────────────────────────────────────────────────
 safe_device_metric = Gauge(
     "home_ids_safe_device",
     "Device is on the safe list (1=excluded from scoring, 0=monitored)",
+    _DEV_LABELS,
+)
+
+# ── Dynamic Limits ─────────────────────────────────────────────────────────
+per_device_threshold_metric = Gauge(
+    "home_ids_per_device_threshold",
+    "Dynamic per-device threshold limit (mean + k * std_dev)",
     _DEV_LABELS,
 )
 
@@ -311,5 +317,19 @@ zeek_notices_metric = Gauge(
 zeek_susp_ports_metric = Gauge(
     "home_ids_zeek_suspicious_ports",
     "Outbound connections to suspicious ports (4444, 31337, IRC etc.)",
+    _DEV_LABELS,
+)
+
+# ── Absolute Baseline Means ────────────────────────────────────────────────
+query_rate_baseline_mean_metric = Gauge(
+    "home_ids_query_rate_baseline_mean",
+    "Per-device query rate moving average baseline (mean)",
+    _DEV_LABELS,
+)
+
+# ── Dynamic Threshold Limits (Mean + k * StdDev) ───────────────────────────
+query_rate_threshold_limit_metric = Gauge(
+    "home_ids_query_rate_threshold_limit",
+    "Per-device dynamic query rate threshold ceiling line",
     _DEV_LABELS,
 )

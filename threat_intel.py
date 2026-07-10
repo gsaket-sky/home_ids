@@ -24,6 +24,9 @@ Architecture:
   • All lookups in-memory O(1) – never block the scoring hot path
   • Background refresh threads with stagger to avoid simultaneous fetches
 """
+"""
+threat_intel.py – Threat intelligence enrichment engine.
+"""
 import csv
 import gzip
 import ipaddress
@@ -39,7 +42,6 @@ from urllib.error import URLError
 
 LOGGER = logging.getLogger("home_ids.ti")
 
-
 # ── Feed definitions ───────────────────────────────────────────────────────
 
 _FEEDS = {
@@ -50,15 +52,25 @@ _FEEDS = {
         "ip_col":   0,
         "tags":     ["c2", "botnet", "feodo"],
         "confidence": 0.95,
-        "ttl":      3600,   # refresh every hour
+        "ttl":      3600,
     },
-    "urlhaus_domains": {
-        "url":      "https://urlhaus.abuse.ch/downloads/csv_recent/",
-        "type":     "csv_domains",
+    # The Hostfile is curated specifically for DNS blocking (avoids Top 1M domains)
+    "urlhaus_hosts": {
+        "url":      "https://urlhaus.abuse.ch/downloads/hostfile/",
+        "type":     "hostfile",
         "comment":  "#",
-        "domain_col": 2,   # URL column — extract hostname
-        "tags":     ["malware", "urlhaus"],
+        "tags":     ["malware", "urlhaus_host"],
         "confidence": 0.90,
+        "ttl":      3600,
+    },
+    # The CSV feed is retained for exact URL/URI matching via Zeek
+    "urlhaus_urls": {
+        "url":      "https://urlhaus.abuse.ch/downloads/csv_recent/",
+        "type":     "csv_urls",
+        "comment":  "#",
+        "url_col":  2,
+        "tags":     ["malware", "urlhaus_url"],
+        "confidence": 0.95,
         "ttl":      3600,
     },
     "threatfox_iocs": {
@@ -71,17 +83,9 @@ _FEEDS = {
     },
 }
 
-# OTX requires a free API key — add yours to config.json
-# "otx_api_key": "your_key_here"
 _OTX_URL = "https://otx.alienvault.com/api/v1/pulses/subscribed?modified_since={since}"
 
-
 class ThreatIntel:
-    """
-    Manages threat intelligence data with background refresh.
-    All lookups are in-memory O(1) — never block the scoring loop.
-    """
-
     def __init__(self, cache_dir: str = "state/ti_cache",
                  otx_api_key: str = "",
                  refresh_interval: int = 3600):
@@ -90,33 +94,35 @@ class ThreatIntel:
         self.otx_api_key      = otx_api_key
         self.refresh_interval = refresh_interval
 
-        # Hot lookup tables — populated by _refresh()
-        self._bad_ips:     dict[str, dict] = {}   # ip str → metadata
-        self._bad_domains: dict[str, dict] = {}   # domain str → metadata
-        self._bad_cidrs:   list[tuple]     = []   # [(network, metadata), ...]
+        self._bad_ips:     dict[str, dict] = {}   
+        self._bad_domains: dict[str, dict] = {}   
+        self._bad_urls:    dict[str, dict] = {}   # New: tracks exact URIs
+        self._bad_cidrs:   list[tuple]     = []   
 
         self._lock       = threading.RLock()
         self._last_load  = 0.0
-        self._stats      = {"ips": 0, "domains": 0, "cidrs": 0, "last_refresh": "never"}
+        self._stats      = {"ips": 0, "domains": 0, "urls": 0, "cidrs": 0, "last_refresh": "never"}
+        
+        self._infrastructure_allowlist = frozenset({
+            "raw.githubusercontent.com",
+            "githubusercontent.com",
+            "github.com",
+            "google.com",
+            "googleapis.com",
+            "apple.com",
+            "icloud.com",
+            "microsoft.com",
+            "windows.com"
+        })
 
-        # Load from disk cache immediately (don't wait for network)
         self._load_cache()
 
-    # ── public API ─────────────────────────────────────────────────────────
-
     def lookup_ip(self, ip: str) -> Optional[dict]:
-        """
-        Check if an IP is in threat intel feeds.
-        Returns None if clean, dict with metadata if malicious.
-        O(1) for exact match, O(n_cidrs) for CIDR check (n_cidrs typically < 200).
-        """
         if not ip or ip == "unknown":
             return None
         with self._lock:
-            # Exact IP match
             if ip in self._bad_ips:
                 return self._bad_ips[ip]
-            # CIDR range match
             try:
                 addr = ipaddress.ip_address(ip)
                 for network, meta in self._bad_cidrs:
@@ -127,18 +133,17 @@ class ThreatIntel:
         return None
 
     def lookup_domain(self, domain: str) -> Optional[dict]:
-        """
-        Check if a domain or its parent is in threat intel feeds.
-        Checks: exact match, eTLD+1 match.
-        Returns None if clean, dict with metadata if malicious.
-        """
         if not domain:
             return None
         domain = domain.lower().strip(".")
+        
+        # New: Intercept if the domain belongs to trusted central multi-tenant clouds
+        if domain in self._infrastructure_allowlist:
+            return None
+        
         with self._lock:
             if domain in self._bad_domains:
                 return self._bad_domains[domain]
-            # Check parent domain (e.g. sub.evil.com → evil.com)
             parts = domain.split(".")
             if len(parts) > 2:
                 parent = ".".join(parts[-2:])
@@ -146,15 +151,17 @@ class ThreatIntel:
                     return {**self._bad_domains[parent], "matched_parent": True}
         return None
 
+    def lookup_url(self, url: str) -> Optional[dict]:
+        """Check if an exact URL matches our feeds (powered by Zeek HTTP)."""
+        if not url:
+            return None
+        with self._lock:
+            return self._bad_urls.get(url)
+
     def check_domain(self, domain: str) -> bool:
-        """Return True if domain matches any loaded IOC feed."""
         return self.lookup_domain(domain) is not None
 
     def ioc_risk_score(self, domain: str = "", ip: str = "") -> float:
-        """
-        Returns a risk contribution (0.0–4.0) based on TI matches.
-        Used directly in scoring.py as an additive risk component.
-        """
         score = 0.0
         if domain:
             match = self.lookup_domain(domain)
@@ -170,21 +177,12 @@ class ThreatIntel:
     def stats(self) -> dict:
         return dict(self._stats)
 
-    # ── background refresh ─────────────────────────────────────────────────
-
     def start_refresh_thread(self) -> None:
-        """Start background thread that refreshes feeds periodically."""
-        t = threading.Thread(
-            target=self._refresh_loop,
-            daemon=True,
-            name="ti-refresh"
-        )
+        t = threading.Thread(target=self._refresh_loop, daemon=True, name="ti-refresh")
         t.start()
-        LOGGER.info("Threat intel refresh thread started (interval=%ds)",
-                    self.refresh_interval)
+        LOGGER.info("Threat intel refresh thread started (interval=%ds)", self.refresh_interval)
 
     def _refresh_loop(self) -> None:
-        # Stagger initial fetch slightly to not hammer on startup
         time.sleep(10)
         while True:
             try:
@@ -197,14 +195,13 @@ class ThreatIntel:
         LOGGER.info("Refreshing threat intel feeds...")
         new_ips     = {}
         new_domains = {}
+        new_urls    = {}
         new_cidrs   = []
 
         for feed_name, feed in _FEEDS.items():
             try:
                 cache_file = self.cache_dir / f"{feed_name}.cache"
-                data       = self._fetch_with_cache(
-                    feed["url"], cache_file, feed["ttl"]
-                )
+                data       = self._fetch_with_cache(feed["url"], cache_file, feed["ttl"])
                 if not data:
                     continue
 
@@ -220,82 +217,99 @@ class ThreatIntel:
                     self._parse_ip_csv(data, feed, meta, new_ips, new_cidrs)
                 elif ftype == "csv_domains":
                     self._parse_domain_csv(data, feed, meta, new_domains)
+                elif ftype == "hostfile":
+                    self._parse_hostfile(data, feed, meta, new_domains)
+                elif ftype == "csv_urls":
+                    self._parse_csv_urls(data, feed, meta, new_urls)
                 elif ftype == "threatfox_csv":
-                    self._parse_threatfox(data, meta, new_ips, new_domains)
+                    self._parse_threatfox(data, meta, new_ips, new_domains, new_urls)
 
             except Exception:
                 LOGGER.exception("Failed to process feed %s", feed_name)
 
-        # OTX (optional — only if API key provided)
         if self.otx_api_key:
             try:
                 self._fetch_otx(new_ips, new_domains)
             except Exception:
                 LOGGER.exception("OTX fetch failed")
 
-        # Atomic swap
         with self._lock:
             self._bad_ips     = new_ips
             self._bad_domains = new_domains
+            self._bad_urls    = new_urls
             self._bad_cidrs   = new_cidrs
             self._stats.update({
                 "ips":          len(new_ips),
                 "domains":      len(new_domains),
+                "urls":         len(new_urls),
                 "cidrs":        len(new_cidrs),
                 "last_refresh": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
             self._last_load = time.time()
 
-        # Persist to disk cache for fast load on next startup
-        self._save_cache(new_ips, new_domains, new_cidrs)
-        LOGGER.info("TI refresh complete: %d IPs, %d domains, %d CIDRs",
-                    len(new_ips), len(new_domains), len(new_cidrs))
-
-    # ── parsers ────────────────────────────────────────────────────────────
+        self._save_cache(new_ips, new_domains, new_urls, new_cidrs)
+        LOGGER.info("TI refresh complete: %d IPs, %d domains, %d URLs, %d CIDRs",
+                    len(new_ips), len(new_domains), len(new_urls), len(new_cidrs))
 
     def _parse_ip_csv(self, data, feed, meta, ips, cidrs):
         for row in csv.reader(data.splitlines()):
-            if not row or row[0].startswith(feed.get("comment", "#")):
-                continue
+            if not row or row[0].startswith(feed.get("comment", "#")): continue
             try:
                 raw = row[feed.get("ip_col", 0)].strip()
-                if not raw:
-                    continue
+                if not raw: continue
                 if "/" in raw:
                     net = ipaddress.ip_network(raw, strict=False)
                     cidrs.append((net, {**meta, "cidr": raw}))
                 else:
-                    ipaddress.ip_address(raw)  # validate
+                    ipaddress.ip_address(raw)
                     ips[raw] = {**meta, "ip": raw}
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError): pass
 
     def _parse_domain_csv(self, data, feed, meta, domains):
         from urllib.parse import urlparse
         col = feed.get("domain_col", 0)
         for row in csv.reader(data.splitlines()):
-            if not row or row[0].startswith(feed.get("comment", "#")):
-                continue
+            if not row or row[0].startswith(feed.get("comment", "#")): continue
             try:
                 raw = row[col].strip().strip('"')
-                if not raw:
-                    continue
-                # Extract hostname from URL if needed
+                if not raw: continue
                 if raw.startswith("http"):
                     raw = urlparse(raw).hostname or ""
                 raw = raw.lower().strip(".")
                 if raw and "." in raw:
                     domains[raw] = {**meta, "domain": raw}
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError): pass
 
-    def _parse_threatfox(self, data, meta, ips, domains):
+    def _parse_hostfile(self, data, feed, meta, domains):
+        for line in data.splitlines():
+            line = line.strip()
+            if not line or line.startswith(feed.get("comment", "#")): continue
+            parts = line.split()
+            # Hostfiles typically look like: 127.0.0.1 bad-domain.com
+            dom = parts[-1].lower().strip(".")
+            if dom and "." in dom and dom != "localhost":
+                domains[dom] = {**meta, "domain": dom}
+
+    def _parse_csv_urls(self, data, feed, meta, urls):
+        from urllib.parse import urlparse
+        col = feed.get("url_col", 2)
+        for row in csv.reader(data.splitlines()):
+            if not row or row[0].startswith(feed.get("comment", "#")): continue
+            try:
+                raw = row[col].strip().strip('"')
+                if raw.startswith("http"):
+                    parsed = urlparse(raw)
+                    # Standardize format to host + path + query for Zeek matching
+                    url_no_proto = f"{parsed.hostname}{parsed.path}"
+                    if parsed.query:
+                        url_no_proto += f"?{parsed.query}"
+                    urls[url_no_proto] = {**meta, "url": raw}
+            except (ValueError, IndexError): pass
+
+    def _parse_threatfox(self, data, meta, ips, domains, urls):
         from urllib.parse import urlparse
         for row in csv.reader(data.splitlines()):
-            if not row or row[0].startswith("#"):
-                continue
-            if len(row) < 3:
-                continue
+            if not row or row[0].startswith("#") or len(row) < 3: continue
             try:
                 ioc_type  = row[2].strip().lower()
                 ioc_value = row[1].strip().strip('"')
@@ -308,24 +322,24 @@ class ThreatIntel:
                     ipaddress.ip_address(ip)
                     ips[ip] = {**entry, "ip": ip}
                 elif ioc_type in ("domain", "url"):
-                    if ioc_value.startswith("http"):
-                        ioc_value = urlparse(ioc_value).hostname or ""
-                    dom = ioc_value.lower().strip(".")
-                    if dom and "." in dom:
-                        domains[dom] = {**entry, "domain": dom}
-            except Exception:
-                pass
+                    if ioc_type == "url" and ioc_value.startswith("http"):
+                        parsed = urlparse(ioc_value)
+                        url_no_proto = f"{parsed.hostname}{parsed.path}"
+                        if parsed.query:
+                            url_no_proto += f"?{parsed.query}"
+                        urls[url_no_proto] = {**entry, "url": ioc_value}
+                    else:
+                        if ioc_value.startswith("http"):
+                            ioc_value = urlparse(ioc_value).hostname or ""
+                        dom = ioc_value.lower().strip(".")
+                        if dom and "." in dom:
+                            domains[dom] = {**entry, "domain": dom}
+            except Exception: pass
 
     def _fetch_otx(self, ips, domains):
-        since = time.strftime(
-            "%Y-%m-%dT%H:%M:%S",
-            time.gmtime(time.time() - self.refresh_interval * 2)
-        )
+        since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - self.refresh_interval * 2))
         url = _OTX_URL.format(since=since)
-        req = Request(url, headers={
-            "X-OTX-API-KEY": self.otx_api_key,
-            "User-Agent": "home-ids/1.0"
-        })
+        req = Request(url, headers={"X-OTX-API-KEY": self.otx_api_key, "User-Agent": "home-ids/1.0"})
         try:
             with urlopen(req, timeout=15) as r:
                 data = json.loads(r.read())
@@ -345,8 +359,7 @@ class ThreatIntel:
                         try:
                             ipaddress.ip_address(val)
                             ips[val] = {**entry, "ip": val}
-                        except ValueError:
-                            pass
+                        except ValueError: pass
                     elif itype in ("domain", "hostname", "URL") and val:
                         from urllib.parse import urlparse
                         if val.startswith("http"):
@@ -357,13 +370,12 @@ class ThreatIntel:
         except Exception:
             LOGGER.warning("OTX fetch failed")
 
-    # ── disk cache ─────────────────────────────────────────────────────────
-
-    def _save_cache(self, ips, domains, cidrs) -> None:
+    def _save_cache(self, ips, domains, urls, cidrs) -> None:
         try:
             payload = {
                 "ips":     ips,
                 "domains": domains,
+                "urls":    urls,
                 "cidrs":   [[str(n), m] for n, m in cidrs],
                 "saved":   time.time(),
             }
@@ -375,39 +387,34 @@ class ThreatIntel:
 
     def _load_cache(self) -> None:
         cache_file = self.cache_dir / "combined.json.gz"
-        if not cache_file.exists():
-            return
+        if not cache_file.exists(): return
         try:
             with gzip.open(cache_file, "rt", encoding="utf-8") as f:
                 payload = json.load(f)
             age = time.time() - payload.get("saved", 0)
-            if age > 86400:  # ignore if > 24 hours old
-                LOGGER.info("TI cache too old (%dh), will refresh", int(age/3600))
+            if age > 86400:
                 return
             cidrs = []
             for net_str, meta in payload.get("cidrs", []):
                 try:
                     cidrs.append((ipaddress.ip_network(net_str, strict=False), meta))
-                except ValueError:
-                    pass
+                except ValueError: pass
             with self._lock:
                 self._bad_ips     = payload.get("ips",     {})
                 self._bad_domains = payload.get("domains", {})
+                self._bad_urls    = payload.get("urls",    {})
                 self._bad_cidrs   = cidrs
                 self._stats.update({
                     "ips":          len(self._bad_ips),
                     "domains":      len(self._bad_domains),
+                    "urls":         len(self._bad_urls),
                     "cidrs":        len(cidrs),
                     "last_refresh": "from cache",
                 })
-            LOGGER.info("Loaded TI cache: %d IPs, %d domains, %d CIDRs (age=%dmin)",
-                        len(self._bad_ips), len(self._bad_domains),
-                        len(cidrs), int(age/60))
         except Exception:
             LOGGER.warning("Could not load TI cache")
 
     def _fetch_with_cache(self, url: str, cache_file: Path, ttl: int) -> Optional[str]:
-        """Fetch URL, using disk cache if still fresh."""
         if cache_file.exists():
             age = time.time() - cache_file.stat().st_mtime
             if age < ttl:
@@ -420,12 +427,9 @@ class ThreatIntel:
             return data
         except URLError as exc:
             LOGGER.warning("Failed to fetch %s: %s", url, exc)
-            # Return stale cache if available
             if cache_file.exists():
-                LOGGER.info("Using stale cache for %s", url)
                 return cache_file.read_text(encoding="utf-8", errors="ignore")
             return None
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # AbuseIPDB integration

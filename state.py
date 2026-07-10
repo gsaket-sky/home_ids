@@ -33,9 +33,6 @@ v5  Variance floor (current version):
       Original floor of 1e-6 caused z-scores of 10,000+ on stable devices
       (a single extra DNS query looked like a 10,000-sigma event).
 """
-"""
-state.py – Persistent baseline states tracking device behaviors.
-"""
 from collections import deque, Counter
 
 # Maximum events held in the rolling window deque.

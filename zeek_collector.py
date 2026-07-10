@@ -214,6 +214,7 @@ class ZeekFeatureExtractor:
         self._http_uas:      defaultdict[str, set]   = defaultdict(set)
         self._notices:       defaultdict[str, list]  = defaultdict(list)
         self._susp_ports:    defaultdict[str, int]   = defaultdict(int)
+        self._http_reqs: defaultdict[str, set] = defaultdict(set)
         self._last_reset     = time.time()
 
     def ingest(self, event: dict) -> None:
@@ -263,6 +264,17 @@ class ZeekFeatureExtractor:
         ua = ev.get("user_agent", "")
         if ua:
             self._http_uas[src].add(ua)
+        
+        host = ev.get("host", "")
+        uri = ev.get("uri", "")
+        if host and uri:
+            # Reconstruct exactly how URLhaus formats it internally (sans protocol)
+            self._http_reqs[src].add(f"{host}{uri}")
+
+    # Add a getter for the main loop
+    def get_http_reqs(self, device_ip: str) -> set:
+        """HTTP Requests (host+uri) observed this cycle."""
+        return set(self._http_reqs.get(device_ip, set()))
 
     def _process_notice(self, src: str, ev: dict) -> None:
         note = ev.get("note", "")
@@ -320,3 +332,4 @@ class ZeekFeatureExtractor:
         self._notices.pop(device_ip, None)
         self._susp_ports.pop(device_ip, None)
         self._http_uas.pop(device_ip, None)
+        self._http_reqs.pop(device_ip, None)

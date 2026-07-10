@@ -15,6 +15,9 @@ Codex changelog 2026-06-18:
   - Removed stale Prometheus label series when safe devices are dropped or hostname/type labels change.
 """
 
+import argparse
+import sys
+
 import hashlib
 import json
 import logging
@@ -59,6 +62,8 @@ from metrics import (
     geo_traffic_total, geo_queries_per_minute, geo_unique_domains,
     geo_entropy, geo_device_count, collector_lag_metric, alert_queue_metric,
     ml_model_loaded_metric, events_processed_metric, alerts_total,
+    query_rate_baseline_mean_metric,
+    query_rate_threshold_limit_metric,
 )
 
 RUNNING         = True
@@ -76,6 +81,49 @@ _GEO_CACHE = OrderedDict()
 _GEO_CACHE_MAX = 1024
 _GEO_CACHE_TTL = 300
 
+def print_ids_documentation():
+    """Outputs the complete Home IDS architecture, config blueprint, and hunting playbook."""
+    print("=" * 80)
+    print("                    HOME IDS - SYSTEM DOCUMENTATION ENGINE                    ")
+    print("=" * 80)
+    print("\n## 1. HIGH-LEVEL ARCHITECTURE")
+    print("-" * 30)
+    print("  [Pi-hole DB] ──(Every 2s)──► [collector.py] ─────┐")
+    print("  [Zeek Logs]  ──(Every 2s)──► [zeek_collector.py] ─┴─► [main.py] (Core loop)")
+    print("                                                            │")
+    print("       ┌──────────────────┬─────────────────────────┼────────────────────────┐")
+    print("       ▼                  ▼                         ▼                        ▼")
+    print(" [state.py]        [features.py]            [threat_intel.py]          [ml_engine.py]")
+    print(" (EWMA Memory)     (13 DNS/Zeek Feats)      (O(1) Feodo/URLhaus/VT)    (IsolationForest)")
+    print("       │                  │                         │                        │")
+    print("       └──────────────────┴───────────┬─────────────┴────────────────────────┘")
+    print("                                      ▼")
+    print("                                [scoring.py] ──(Risk >= threshold)──► [Telegram Alerts]")
+
+    print("\n## 2. CORE CONFIGURATION BLUEPRINT & IMPACTS")
+    print("-" * 45)
+    print("  • poll_interval       : Sleep loop timer (Default: 2s). Lowering increases resolution.")
+    print("  • window_seconds     : Focus depth for feature extraction counters (Default: 300s/5min).")
+    print("  • alert_threshold    : Actionable risk score floor (Default: 6.0). Lower drops false negatives.")
+    print("  • threshold_std_dev  : Sigma multiplier (k) for dynamic baseline bounds (Default: 3.0).")
+    print("  • baseline_alpha     : EWMA adaptation weight (Default: 0.05). High values blur threat memory.")
+    print("  • decay_factor       : Beaconing half-life degradation factor (Default: 0.995).")
+
+    print("\n## 3. THREAT IDENTIFICATION PLAYBOOK")
+    print("-" * 37)
+    print("  [A] COMMAND & CONTROL BEACONING:")
+    print("      - Indicators : High home_ids_zscore_query_rate + top_domain_ratio approaching 1.0.")
+    print("      - Concept    : Device stops natural browsing rhythms and ticks fixedly to an endpoint.")
+    print("\n  [B] DGA MALWARE BURST:")
+    print("      - Indicators : Spike in home_ids_new_domains + home_ids_zscore_nxdomain_ratio.")
+    print("      - Concept    : Ransomware querying randomized strings trying to find live active servers.")
+    print("\n  [C] DETERMINISTIC MALICIOUS CONNECTIONS:")
+    print("      - Indicators : home_ids_ti_match == 1 OR home_ids_zeek_ja3_malicious > 0.")
+    print("      - Concept    : Client hit a blocklist threat feed IP or matched standard malware TLS fingerprints.")
+    print("\n  [D] STEALTHY BEHAVIORAL ANOMALIES:")
+    print("      - Indicators : Elevated home_ids_ml_anomaly_score with flat standard Z-scores.")
+    print("      - Concept    : Isolation Forest detected structural shifting inside multi-feature data matrix.")
+    print("=" * 80)
 
 # =============================================================================
 # DETECTOR ENGINE DUCK-TYPING PROPERTY COUPLING PIPELINE
@@ -101,19 +149,6 @@ except Exception as patch_exc:
 def calculate_zscore(val: float, baseline, cap=8.0) -> float:
     """
     Safely calculates the Z-Score of a feature using its running baseline.
-
-    FP-1 fix: n gate raised from 50 → 100. A device needs at least 100
-    scoring cycles (~3.3 min at 2s poll) before its variance is meaningful.
-    Devices with only 4-8 total events (amazon-23bccab01: z=46,
-    dp-704107RJ: z=1000) were firing because their variance was still ~0
-    while the gate only excluded n<50.
-
-    std floor raised from max(var,0.25) → max(var,1.0) to match the
-    _baseline_zscore_patch convention. At std=0.5 a mean-shift of 0.5
-    gives z=1.0 which is fine; but at std=0.5 a new device seeing its
-    first spike gives z = spike/0.5 which is catastrophically high.
-    Using 1.0 as the floor means a z=3 threshold requires an absolute
-    deviation of at least 3 query_rate units — reasonable.
     """
     if not getattr(baseline, 'initialized', False) or getattr(baseline, 'n', 0) < 100:
         return 0.0
@@ -257,7 +292,8 @@ _DEVICE_GAUGES = (
     zscore_dga_metric, risk_velocity_metric, zeek_conn_count_metric,
     zeek_new_ips_metric, zeek_ja3_metric, zeek_notices_metric,
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
-    safe_device_metric,
+    safe_device_metric, query_rate_baseline_mean_metric,
+    query_rate_threshold_limit_metric,
 )
 
 
@@ -319,6 +355,7 @@ def _evaluate_intel(
     abuseipdb: AbuseIPDB | None,
     vt: VirusTotalClient | None,
     zeek_dest_ips: set,
+    zeek_http_reqs: set,  # <-- Inject Zeek HTTP Reqs
 ) -> tuple[float, float, float, int, list]:
     """
     Evaluate all IOC feeds for a device window.
@@ -330,6 +367,25 @@ def _evaluate_intel(
     any_match = 0
     matches = []
     checked_ips: set[str] = set()
+
+    # Check exact URL matches from Zeek's http.log
+    for req in zeek_http_reqs:
+        url_ti = ti.lookup_url(req)
+        if url_ti:
+            score = url_ti.get("confidence", 0.95) * 4.0
+            ti_risk = max(ti_risk, score)
+            any_match = 1
+            matches.append({
+                "provider": url_ti.get("source", "threat_intel"),
+                "ioc_type": "url",
+                "url": req,
+                "hostname": st.hostname or "unknown",
+                "device_ip": st.client_ip or "unknown",
+                "confidence": url_ti.get("confidence"),
+                "tags": url_ti.get("tags", []),
+                "risk": score,
+            })
+            ti_ioc_hits_total.labels(source="threat_intel", ioc_type="url").inc()
 
     def _check_ip(ip: str) -> None:
         nonlocal ti_risk, abuse_risk, vt_risk, any_match
@@ -478,6 +534,17 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
 def main():
     global RUNNING
 
+    # Set up argument parser for terminal documentation injection
+    parser = argparse.ArgumentParser(description="Home IDS Threat Hunting Engine Processing Daemon")
+    parser.add_main = parser.add_argument(
+        "--info", action="store_true", help="Display interactive system architecture, config blueprint, and hunting playbook"
+    )
+    args, unknown = parser.parse_known_args()
+
+    if args.info:
+        print_ids_documentation()
+        sys.exit(0)
+        
     setup_logging()
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -582,7 +649,6 @@ def main():
     while RUNNING:
         loop_start = time.time()
         try:
-            # B2: poll() now returns list[dict] — no pandas, no iterrows()
             rows = collector.poll()
             zeek_events = list(zeek.poll())
             for zeek_event in zeek_events:
@@ -596,7 +662,6 @@ def main():
             if rows:
                 collector_lag_metric.set(max(0.0, now - rows[-1]["timestamp"]))
 
-                # B4: single lock acquisition for the entire ingest batch
                 with STATE_LOCK:
                     for row in rows:
                         client_ip = str(row["client_ip"])
@@ -637,9 +702,7 @@ def main():
                 active_devices = list(states.items())
 
             geo_country_counts = Counter()
-            # Map tracking distinct active device IDs encountered per lookup dimension combo
             geo_device_tracking = {}
-            # Map tracking distinct domains queried per lookup dimension combo
             geo_domain_tracking = {}
 
             for dev_id, st in active_devices:
@@ -664,14 +727,29 @@ def main():
                 feats["blocked_ratio_z"]      = calculate_zscore(feats["blocked_ratio"], st.blocked_baseline)
                 feats["suspicious_domains_z"] = calculate_zscore(feats["suspicious_domains"], st.dga_baseline)
 
-                # Zeek network signals — needed before intel enrichment (Zeek dest IPs)
+                # --- NEW: Dynamic Threshold Calculation ---
+                std_dev_multiplier = float(CONFIG.get("threshold_std_dev", 3.0))
+                device_overrides = CONFIG.get("per_device_thresholds", {})
+                device_multiplier = device_overrides.get(st.client_ip, std_dev_multiplier)
+
+                if getattr(st.rate_baseline, 'initialized', False) and getattr(st.rate_baseline, 'n', 0) >= 100:
+                    mean = getattr(st.rate_baseline, 'mean', 0.0)
+                    std_dev = math.sqrt(max(getattr(st.rate_baseline, 'var', 1.0), 1.0))
+                    current_threshold_limit = mean + (device_multiplier * std_dev)
+                else:
+                    mean =0.0
+                    current_threshold_limit = 0.0
+
+                # ------------------------------------------
+
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
                 zeek_alerts = zeek_fx.get_alerts(st.client_ip)
                 zeek_dest_ips = zeek_fx.get_dest_ips(st.client_ip)
+                zeek_http_reqs = zeek_fx.get_http_reqs(st.client_ip)  # <-- Pull from Zeek
                 feats.update(zeek_feats)
 
                 ti_risk, abuse_risk, vt_risk, ti_match, ti_matches = _evaluate_intel(
-                    st, feats, ti, abuseipdb, vt, zeek_dest_ips,
+                    st, feats, ti, abuseipdb, vt, zeek_dest_ips, zeek_http_reqs,
                 )
                 feats["ti_risk"] = ti_risk
                 feats["abuseipdb_risk"] = abuse_risk
@@ -679,7 +757,6 @@ def main():
 
                 ml_score = ml.score(dev_id, feats)
 
-                # B4: baseline updates + scoring in one lock block
                 with STATE_LOCK:
                     st.rate_baseline.update(feats["query_rate"])
                     st.entropy_baseline.update(feats["entropy_avg"])
@@ -693,10 +770,6 @@ def main():
                 ml.learn(dev_id, feats)
                 zeek_fx.reset_cycle(st.client_ip)
 
-                # seen_domains: insertion-ordered dict {domain: None}.
-                # Type guard: old saved state files stored this as a set or
-                # list — convert to dict on first access so we never crash
-                # with "dictionary update sequence element has length N".
                 if not isinstance(st.seen_domains, dict):
                     st.seen_domains = {}
                 st.seen_domains.update((d, None) for d in st.rolling.domains)
@@ -704,12 +777,11 @@ def main():
                     del st.seen_domains[next(iter(st.seen_domains))]
 
                 risk_velocity = calculate_zscore(risk_score, st.risk_baseline)
-                st.risk_baseline.update(risk_score)   # B4: no extra lock needed
+                st.risk_baseline.update(risk_score)
 
                 ti_risk_metric.labels(dev_id, st.hostname, st.device_type).set(ti_risk)
                 ti_match_metric.labels(dev_id, st.hostname, st.device_type).set(ti_match)
 
-                # GeoIP Routing Evaluation Loop
                 for domain_entry, d_count in st.rolling.domains.items():
                     geo_info = _geo_lookup_cached(geoip_engine, domain_entry)
                     c_code = geo_info.get("country", "unknown")
@@ -728,7 +800,6 @@ def main():
                         geo_risk = 5.0
                         geo_beacon = d_count
 
-                    # 1. CORE GEOMAP SIGNALS
                     geo_risk_metric.labels(c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon).set(geo_risk)
                     if geo_risk > 0:
                         geo_hits_metric.labels(c_code, c_asn).inc(d_count)
@@ -736,20 +807,15 @@ def main():
                         geo_beacon_metric.labels(c_code, c_asn).inc(geo_beacon)
                     asn_risk_metric.labels(c_asn, c_org).set(5.0 if geo_risk > 0 else 0.0)
 
-                    # 2. FULL TRAFFIC GEOGRAPHIC ACCUMULATORS (Aligned to exact dimension labels)
                     geo_traffic_total.labels(c_code, c_city, c_cont, c_asn, c_org, c_lat, c_lon).inc(d_count)
                     
-                    # Compute window rate metric (Queries Per Minute)
                     qpm_calc = d_count * (60.0 / float(CONFIG["window_seconds"]))
                     geo_queries_per_minute.labels(c_code, c_city, c_asn, c_lat, c_lon).set(qpm_calc)
                     
-                    # Tracking helper metrics for uniques/entropy/devices across intersections
                     dim_3 = (c_code, c_city, c_asn)
                     geo_domain_tracking.setdefault(dim_3, set()).add(domain_entry)
                     geo_device_tracking.setdefault(dim_3, set()).add(dev_id)
 
-                    # B1: entropy() called directly — was creating a new
-                    # FeatureExtractor object per domain (up to 4000/cycle).
                     try:
                         from utils import entropy as _ent_fn
                         ent_score = _ent_fn(domain_entry.split(".")[0])
@@ -773,9 +839,11 @@ def main():
                     zeek_feats.get("zeek_susp_ports", 0)
                 )
 
-                # Export Core & Advanced Detection Signals
                 risk_metric.labels(dev_id, st.hostname, st.device_type).set(risk_score)
                 query_rate_metric.labels(dev_id, st.hostname, st.device_type).set(feats["query_rate"])
+                query_rate_baseline_mean_metric.labels(dev_id, st.hostname, st.device_type).set(mean)
+                query_rate_threshold_limit_metric.labels(dev_id, st.hostname, st.device_type).set(current_threshold_limit)
+
                 unique_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats["unique_domains"])
                 entropy_metric.labels(dev_id, st.hostname, st.device_type).set(feats["entropy_avg"])
                 blocked_ratio_metric.labels(dev_id, st.hostname, st.device_type).set(feats["blocked_ratio"])
@@ -783,7 +851,6 @@ def main():
                 suspicious_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats["suspicious_domains"])
                 ml_anomaly_metric.labels(dev_id, st.hostname, st.device_type).set(ml_score)
 
-                # Export Vector Statistical Signal Z-Scores
                 zscore_query_metric.labels(dev_id, st.hostname, st.device_type).set(feats["query_rate_z"])
                 zscore_entropy_metric.labels(dev_id, st.hostname, st.device_type).set(feats["entropy_avg_z"])
                 zscore_unique_metric.labels(dev_id, st.hostname, st.device_type).set(feats["unique_domains_z"])
@@ -792,13 +859,12 @@ def main():
                 zscore_dga_metric.labels(dev_id, st.hostname, st.device_type).set(feats["suspicious_domains_z"])
                 risk_velocity_metric.labels(dev_id, st.hostname, st.device_type).set(risk_velocity)
 
-                # Export Contextual Domain Telemetry Signals
                 new_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("new_domains", 0.0))
                 deep_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("deep_domains", 0.0))
                 nxdomain_tld_conc_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("nxdomain_tld_conc", 0.0))
+                
                 safe_device_metric.labels(dev_id, st.hostname, st.device_type).set(1.0 if risk_score < 4.0 else 0.0)
 
-                # Hysteresis Alert Engine & Dynamic Signature Generation
                 alert_threshold = float(CONFIG["alert_threshold"])
                 if risk_score >= alert_threshold:
                     factors = risk_details.get("factors", [])
@@ -826,8 +892,6 @@ def main():
                         st.last_alert_risk = 0.0
                         st.last_alert_signature = ""
 
-
-            # 3. EXPORT EXPLICIT INTERSECTION GEOGRAPHIC TELEMETRY
             for dim_3, unique_domains_set in geo_domain_tracking.items():
                 c_code, c_city, c_asn = dim_3
                 geo_unique_domains.labels(c_code, c_city, c_asn).set(len(unique_domains_set))
@@ -836,12 +900,10 @@ def main():
                 c_code, c_city, c_asn = dim_3
                 geo_device_count.labels(c_code, c_city, c_asn).set(len(unique_devices_set))
 
-            # Push Country Density Distributions
             if geo_country_counts:
                 top_country = geo_country_counts.most_common(1)[0][0]
                 country_density_metric.labels(country=top_country).set(geo_country_counts[top_country])
 
-            # Update Infrastructure Metrics
             try:
                 alert_queue_metric.set(alerts.q.qsize())
             except Exception:

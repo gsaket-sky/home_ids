@@ -3,6 +3,8 @@
   "window_seconds": 300,
   "startup_lookback_seconds": 300,
   "alert_threshold": 6.0,
+  "threshold_std_dev": 3.0,
+  "per_device_thresholds": {},
   "ml_warmup_samples": 5000,
   "baseline_alpha": 0.05,
   "decay_factor": 0.995,
@@ -39,11 +41,11 @@
     "Added alert_json_path and alert_json_max_bytes for capped JSON alert logs."
   ],
   "_config_notes": {
-    "window_seconds": "300s (5 min) \u2014 was 600. Faster DGA detection, matches startup_lookback",
-    "ml_warmup_samples": "5000 \u2014 was 10000. Per-device model now activates in ~2.8h not 5.5h",
-    "baseline_alpha": "0.05 kept \u2014 correct EWMA speed for rate/entropy/unique",
-    "decay_factor": "0.995 kept \u2014 correct domain count half-life of ~4.6 min",
-    "poll_interval": "2s kept \u2014 optimal, Pi-hole DB is event-driven not time-driven",
-    "alert_threshold": "6.0 kept \u2014 well-calibrated after FP sensitivity fixes"
+    "window_seconds": "300s (5 min) — was 600. Faster DGA detection, matches startup_lookback",
+    "ml_warmup_samples": "5000 — was 10000. Per-device model now activates in ~2.8h not 5.5h",
+    "baseline_alpha": "0.05 kept — correct EWMA speed for rate/entropy/unique",
+    "decay_factor": "0.995 kept — correct domain count half-life of ~4.6 min",
+    "poll_interval": "2s kept — optimal, Pi-hole DB is event-driven not time-driven",
+    "alert_threshold": "6.0 kept — well-calibrated after FP sensitivity fixes"
   }
 }
