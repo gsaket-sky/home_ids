@@ -38,12 +38,38 @@ state.py – Persistent baseline states tracking device behaviors.
 """
 from collections import deque, Counter
 
+# Maximum events held in the rolling window deque.
+# 50 q/min laptop × 300s window = 250 events normal peak.
+# 10_000 gives a 40× safety margin and still bounds RAM.
+_MAX_EVENTS_PER_DEVICE  = 10_000
+# Maximum unique domain entries in the per-device Counter.
+# A laptop browsing normally sees ~200 unique domains/5min.
+# 2_000 gives 10× headroom and bounds RAM at ~120 KB/device.
+_MAX_DOMAINS_PER_DEVICE = 2_000
+
+
 class RollingWindow:
     def __init__(self):
-        self.events = deque()
-        self.domains = Counter()
-        self.blocked = 0.0
+        # FIX 1: maxlen bounds the deque — no matter how many events
+        # arrive in one burst (startup seed, chatty device), the deque
+        # never exceeds _MAX_EVENTS_PER_DEVICE entries.
+        self.events   = deque(maxlen=_MAX_EVENTS_PER_DEVICE)
+        self.domains  = Counter()
+        self.blocked  = 0.0
         self.nxdomain = 0.0
+
+    def cap_domains(self) -> None:
+        """
+        FIX 2: hard cap on Counter size.
+        Evict the lowest-count entries when the Counter grows beyond
+        _MAX_DOMAINS_PER_DEVICE. Called from features.py after each
+        eviction pass. Domains with count near 0 are stale anyway.
+        """
+        if len(self.domains) > _MAX_DOMAINS_PER_DEVICE:
+            # Keep the top-N by count — most recently active domains
+            # have the highest decayed count values.
+            keep = self.domains.most_common(_MAX_DOMAINS_PER_DEVICE)
+            self.domains = Counter(dict(keep))
 
 
 class BaselineMetric:
@@ -93,7 +119,14 @@ class DeviceState:
         self.last_alert_signature = ""
 
         self.rolling = RollingWindow()
-        self.seen_domains = set()
+        # FIX 3: seen_domains uses a plain dict (insertion-ordered since
+        # Python 3.7) instead of a set. Oldest entries are at the front
+        # and can be evicted reliably with next(iter(d)) — unlike a set
+        # where list(s)[-N:] returns arbitrary elements.
+        # Cap reduced from 20_000 → 5_000: sufficient for the new_domains
+        # signal (we only care whether a domain is "new this window") and
+        # 5_000 × ~60 bytes = 300 KB per device vs 1.2 MB previously.
+        self.seen_domains: dict = {}   # domain → None (ordered set)
 
         self.rate_baseline = BaselineMetric(alpha)
         self.entropy_baseline = BaselineMetric(alpha)
@@ -138,5 +171,13 @@ class DeviceState:
         if "dga_baseline" in d: obj.dga_baseline = BaselineMetric.from_dict(d["dga_baseline"])
         if "risk_baseline" in d: obj.risk_baseline = BaselineMetric.from_dict(d["risk_baseline"])
         
-        obj.seen_domains = set(d.get("seen_domains", []))
+        # Restore seen_domains as insertion-ordered dict regardless of
+        # what format it was saved in (list from old code, or dict keys).
+        # A list of strings → {s: None for s in list} gives the right type.
+        # An empty default → {}.
+        raw_seen = d.get("seen_domains", [])
+        if isinstance(raw_seen, dict):
+            obj.seen_domains = raw_seen
+        else:
+            obj.seen_domains = {s: None for s in raw_seen if isinstance(s, str)}
         return obj

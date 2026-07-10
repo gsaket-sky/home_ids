@@ -1,23 +1,3 @@
-"""
-metrics.py – Prometheus metrics definitions.
-
-Changelog
-─────────────────────────────────────────────────────────────────────
-v1  Original: 26 metrics covering core IDS, ML, geo, and infrastructure.
-
-v2  New detection signal metrics added (current version, 33 total):
-    home_ids_new_domains           – first-seen domain count (DGA burst)
-    home_ids_deep_domains          – DNS label depth > 5 (tunnelling)
-    home_ids_nxdomain_tld_concentration – TLD concentration (DGA family)
-    home_ids_zscore_nxdomain_ratio – NXDOMAIN z-score vs device baseline
-    home_ids_zscore_blocked_ratio  – blocked ratio z-score vs baseline
-    home_ids_zscore_suspicious_domains – DGA count z-score vs baseline
-    home_ids_risk_velocity         – risk score z-score (sudden spikes)
-
-    All 7 metrics carry device/hostname/device_type labels.
-    All pushed once per device per poll cycle from main.py.
-"""
-
 from prometheus_client import Gauge, Counter
 
 # =========================
@@ -225,115 +205,111 @@ alerts_total = Counter(
     "IDS alerts triggered"
 )
 
-# =========================
-# NEW DETECTION SIGNALS
-# (added after detection logic improvements)
-# =========================
+# ══════════════════════════════════════════════════════════════════════════
+# NEW DETECTION SIGNAL METRICS
+# Added to match imports in main.py — were missing causing ImportError
+# ══════════════════════════════════════════════════════════════════════════
 
+_DEV_LABELS = ["device", "hostname", "device_type"]
+
+# ── New DNS signals ────────────────────────────────────────────────────────
 new_domains_metric = Gauge(
     "home_ids_new_domains",
-    "Domains seen for the first time this window (DGA new-domain burst indicator)",
-    ["device", "hostname", "device_type"]
+    "Domains seen for the first time this window (DGA burst indicator)",
+    _DEV_LABELS,
 )
 
 deep_domains_metric = Gauge(
     "home_ids_deep_domains",
     "Domains with > 5 DNS labels (DNS tunnelling depth indicator)",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
 nxdomain_tld_conc_metric = Gauge(
     "home_ids_nxdomain_tld_concentration",
     "Fraction of traffic under the top TLD (DGA family clustering signal)",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
+# ── Per-device baseline z-scores ──────────────────────────────────────────
 zscore_nxdomain_metric = Gauge(
     "home_ids_zscore_nxdomain_ratio",
     "NXDOMAIN ratio z-score vs device baseline",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
 zscore_blocked_metric = Gauge(
     "home_ids_zscore_blocked_ratio",
     "Blocked ratio z-score vs device baseline",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
 zscore_dga_metric = Gauge(
     "home_ids_zscore_suspicious_domains",
     "Suspicious domain count z-score vs device baseline",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
+# ── Risk velocity ──────────────────────────────────────────────────────────
 risk_velocity_metric = Gauge(
     "home_ids_risk_velocity",
     "Risk score z-score vs device risk baseline (sudden spike detector)",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
-# =========================
-# ZEEK NETWORK SIGNALS
-# =========================
-
-zeek_conn_count_metric = Gauge(
-    "home_ids_zeek_conn_count",
-    "Total TCP/UDP connections seen by Zeek (catches direct IP C2)",
-    ["device", "hostname", "device_type"]
-)
-
-zeek_new_ips_metric = Gauge(
-    "home_ids_zeek_new_ips",
-    "Unique destination IPs seen this cycle via Zeek conn.log",
-    ["device", "hostname", "device_type"]
-)
-
-zeek_ja3_metric = Gauge(
-    "home_ids_zeek_ja3_malicious",
-    "Malicious JA3 TLS fingerprint hits (Cobalt Strike, Meterpreter etc)",
-    ["device", "hostname", "device_type"]
-)
-
-zeek_notices_metric = Gauge(
-    "home_ids_zeek_notices",
-    "Zeek notice/weird log events for this device",
-    ["device", "hostname", "device_type"]
-)
-
-zeek_susp_ports_metric = Gauge(
-    "home_ids_zeek_suspicious_ports",
-    "Outbound connections to suspicious ports (4444, 31337, IRC etc)",
-    ["device", "hostname", "device_type"]
-)
-
-# =========================
-# THREAT INTELLIGENCE
-# =========================
-
+# ── Threat intelligence ────────────────────────────────────────────────────
 ti_risk_metric = Gauge(
     "home_ids_ti_risk",
     "Threat intelligence risk contribution (0=clean, 4=known IOC)",
-    ["device", "hostname", "device_type"]
+    _DEV_LABELS,
 )
 
 ti_match_metric = Gauge(
     "home_ids_ti_match",
-    "Threat intelligence IOC match flag (0=clean 1=matched)",
-    ["device", "hostname", "device_type"]
+    "Threat intelligence IOC match flag (0=clean, 1=matched)",
+    _DEV_LABELS,
 )
 
 ti_ioc_hits_total = Counter(
     "home_ids_ti_ioc_hits_total",
     "Total IOC matches from all TI feeds",
-    ["source", "ioc_type"]   # source=feodo/urlhaus/abuseipdb etc, ioc_type=ip/domain
+    ["source", "ioc_type"],   # e.g. source=feodo/urlhaus/abuseipdb, ioc_type=ip/domain
 )
 
-# =========================
-# SAFE LIST / ALLOWLIST
-# =========================
-
+# ── Safe list ──────────────────────────────────────────────────────────────
 safe_device_metric = Gauge(
     "home_ids_safe_device",
-    "Device is on the safe list (1=safe, 0=monitored)",
-    ["device", "hostname", "device_type"]
+    "Device is on the safe list (1=excluded from scoring, 0=monitored)",
+    _DEV_LABELS,
+)
+
+# ── Zeek network signals ───────────────────────────────────────────────────
+zeek_conn_count_metric = Gauge(
+    "home_ids_zeek_conn_count",
+    "Total TCP/UDP connections seen by Zeek this cycle",
+    _DEV_LABELS,
+)
+
+zeek_new_ips_metric = Gauge(
+    "home_ids_zeek_new_ips",
+    "Unique destination IPs seen this cycle via Zeek conn.log",
+    _DEV_LABELS,
+)
+
+zeek_ja3_metric = Gauge(
+    "home_ids_zeek_ja3_malicious",
+    "Malicious JA3 TLS fingerprint hits (Cobalt Strike, Meterpreter etc.)",
+    _DEV_LABELS,
+)
+
+zeek_notices_metric = Gauge(
+    "home_ids_zeek_notices",
+    "Zeek notice/weird log events for this device this cycle",
+    _DEV_LABELS,
+)
+
+zeek_susp_ports_metric = Gauge(
+    "home_ids_zeek_suspicious_ports",
+    "Outbound connections to suspicious ports (4444, 31337, IRC etc.)",
+    _DEV_LABELS,
 )

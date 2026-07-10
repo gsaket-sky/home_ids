@@ -13,6 +13,11 @@ v5  Environment Variable Hardening (Current Version):
       (IDS_TELEGRAM_TOKEN, IDS_TELEGRAM_CHAT_ID, IDS_OTX_API_KEY).
     • Sanitizes and injects environment configurations transparently across workers.
     • IDS_ABUSEIPDB_KEY and IDS_VIRUSTOTAL_KEY for optional enrichment feeds.
+
+Codex changelog 2026-06-18:
+  - Added alert_json_path and alert_json_max_bytes defaults for capped alert file logging.
+  - Added safe_host_patterns defaults for Pi-hole hostname exclusion.
+  - safe_ips remains the direct IP allowlist for DNS servers and other infrastructure.
 """
 
 import json
@@ -48,7 +53,10 @@ DEFAULT_CONFIG = {
     "virustotal_api_key": "",
     "ti_refresh_interval": 3600,
     "safe_ips": ["127.0.0.1"],
+    "safe_host_patterns": ["pihole", "pi-hole", "pi_hole", "pi.hole"],
     "device_type_overrides": {},
+    "alert_json_path": "alerts.json",
+    "alert_json_max_bytes": 1073741824,
 }
 
 

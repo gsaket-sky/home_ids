@@ -1,0 +1,69 @@
+[Unit]
+Description=Home SOC IDS
+Documentation=https://github.com/youruser/home-ids
+After=network-online.target pihole-FTL.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsaket
+WorkingDirectory=/home/gsaket/myscripts/home-ids/productive/ids_engine_v39
+
+# Use the full path to python3 to avoid PATH issues
+ExecStart=/usr/bin/python3 main.py
+
+# ── Shutdown behaviour ────────────────────────────────────────────────────
+# Give the process 30 seconds to handle SIGTERM cleanly:
+#   ~12s  alert worker finishes current Telegram message
+#   ~8s   state save (baselines + seen_domains)
+#   ~5s   ML model save if a retrain was in progress
+#   ~5s   margin
+# After 30s systemd sends SIGKILL — acceptable, state is already saved.
+TimeoutStopSec=30
+
+# Send SIGTERM to the main process only (not the whole cgroup).
+# Our daemon threads are all daemon=True so they die with the main process.
+KillMode=mixed
+KillSignal=SIGTERM
+
+# ── Restart policy ────────────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=10
+# Don't restart if it crashes more than 5 times in 2 minutes
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# ── Resource limits ───────────────────────────────────────────────────────
+# Prevent the IDS from starving Pi-hole on the same machine.
+# CPUQuota=40% limits to ~1.6 cores on a 4-core machine.
+# MemoryMax=512M is generous — typical usage is 80-150MB.
+CPUQuota=40%
+MemoryMax=512M
+# Ensure Pi-hole gets priority — IDS is best-effort monitoring
+Nice=10
+IOSchedulingClass=idle
+
+# ── Logging ───────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=home-ids
+
+# ── Security hardening ────────────────────────────────────────────────────
+# Restrict what the IDS process can do if compromised.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Allow write to the IDS directory and Pi-hole DB (read-only)
+ReadWritePaths=/home/gsaket/myscripts/home-ids/productive/ids_engine_v39
+ReadOnlyPaths=/etc/pihole
+
+# Environment — move secrets out of config.json
+# Uncomment and set these instead of putting tokens in config.json:
+# Environment=IDS_TELEGRAM_TOKEN=your_token_here
+# Environment=IDS_TELEGRAM_CHAT_ID=your_chat_id_here
+# Environment=IDS_OTX_API_KEY=your_key_here
+# Environment=IDS_ABUSEIPDB_KEY=your_key_here
+# Environment=IDS_VIRUSTOTAL_KEY=your_key_here
+
+[Install]
+WantedBy=multi-user.target

@@ -1,35 +1,37 @@
 """
-features.py – Scale-Normalized Vector Feature Extraction.
+features.py – Per-device DNS feature extraction.
 
-Hardened Architectural Syncs:
-  • Handles signature inspection for suspicious_dga transparently.
-  • Clamps window counters cleanly to eliminate floating-point decay drops.
+Fix applied (this version):
+  events_per_second previously used `time.time() - rw.start` as the
+  denominator. rw.start is set once at device creation and never resets,
+  so after the process has been running a while this denominator is huge
+  and events_per_second rounds to ~0 for every device — EXCEPT right
+  after a restart, when it is tiny and any small burst (e.g. an Echo's
+  hourly check-ins) spikes events_per_second artificially high, which
+  combined with a naturally-high top_domain_ratio (repeatedly hitting the
+  same vendor endpoint) trips the beaconing rule in scoring.py for a
+  perfectly normal device. Fixed to use window_seconds (the actual
+  analysis window) as the denominator — stable regardless of uptime.
+
+  top_domain_ratio numerator/denominator now both come from the same
+  decayed Counter sum, instead of mixing a decayed float against the
+  integer len(rw.events).
 """
-import math
-import time
-import inspect
+
 from collections import Counter
 from utils import entropy, suspicious_dga
 
-BLOCKED  = frozenset({1, 4, 5, 6, 7, 8, 10})
+BLOCKED  = frozenset({1, 4, 5, 6, 7, 8})
 NXDOMAIN = frozenset({3, 12, 13})
 
 
 class FeatureExtractor:
-    def __init__(self):
-        try:
-            sig = inspect.signature(suspicious_dga)
-            self._dga_takes_entropy = len(sig.parameters) >= 2
-        except Exception:
-            self._dga_takes_entropy = False
 
     def compute(self, state, now: float, window_seconds: int) -> dict:
-        rw      = state.rolling
-        popleft = rw.events.popleft
-        cutoff  = now - window_seconds
+        rw = state.rolling
 
-        while rw.events and rw.events[0][0] < cutoff:
-            ts, domain, status = popleft()
+        while rw.events and rw.events[0][0] < now - window_seconds:
+            ts, domain, status = rw.events.popleft()
             if status in BLOCKED:
                 rw.blocked = max(rw.blocked - 1, 0.0)
             if status in NXDOMAIN:
@@ -38,82 +40,88 @@ class FeatureExtractor:
             if rw.domains[domain] <= 0:
                 del rw.domains[domain]
 
+        # FIX 2: cap Counter size after eviction pass
+        rw.cap_domains()
+
         n_events = len(rw.events)
         if n_events == 0:
             return _zero_features()
 
-        entropy_sum = 0
-        suspicious  = 0
+        entropy_sum  = 0.0
+        suspicious   = 0
         deep_domains = 0
-        new_domains  = 0
-        tld_counts   = Counter()
+        for domain in rw.domains:
+            parts        = domain.split(".")
+            entropy_sum += entropy(parts[0])
+            if suspicious_dga(domain):
+                suspicious += 1
+            if len(parts) > 5:
+                deep_domains += 1
 
-        for domain, count in rw.domains.items():
-            ent = entropy(domain)
-            entropy_sum += ent * count
-
-            if self._dga_takes_entropy:
-                is_dga = suspicious_dga(domain, ent)
-            else:
-                is_dga = suspicious_dga(domain)
-
-            if is_dga:
-                suspicious += count
-
-            labels = domain.split(".")
-            if len(labels) > 5:
-                deep_domains += count
-
-            if domain not in state.seen_domains:
-                new_domains += count
-
-            if len(labels) >= 2:
-                tld = labels[-1]
-                tld_counts[tld] += count
-
-        avg_entropy = entropy_sum / n_events
-        query_rate  = (n_events / window_seconds) * 60.0
         n_domains   = len(rw.domains)
+        avg_entropy = entropy_sum / max(n_domains, 1)
 
-        mean_rate = n_events / len(rw.domains) if rw.domains else 1.0
-        query_variance = float(sum((count - mean_rate) ** 2 for count in rw.domains.values()) / n_domains) if n_domains > 1 else 0.0
-        events_per_second = n_events / window_seconds
+        query_rate = n_events * 60.0 / window_seconds
 
-        top_domain_count = rw.domains.most_common(1)[0][1] if rw.domains else 0
-        top_domain_ratio = top_domain_count / sum(rw.domains.values())
+        # Fix: use window_seconds, not wall-clock since device creation.
+        events_per_second = n_events / max(window_seconds, 1)
 
-        new_domains_ratio = new_domains / n_events
-        deep_domains_ratio = deep_domains / n_events
+        vals   = rw.domains.values()
+        mean_v = sum(vals) / max(n_domains, 1)
+        query_variance = (
+            sum((v - mean_v) ** 2 for v in rw.domains.values()) / max(n_domains, 1)
+        )
+
+        domain_total     = sum(rw.domains.values()) or 1
+        top_val          = max(rw.domains.values(), default=0)
+        top_domain_ratio = top_val / domain_total
+
+        # seen_domains is an insertion-ordered dict {domain: None}.
+        # Guard against old saved states that stored it as a set.
+        if not isinstance(getattr(state, "seen_domains", None), dict):
+            state.seen_domains = {}
+        new_domains = sum(1 for d in rw.domains if d not in state.seen_domains)
+        # Dict update: add new keys with None value (acts as an ordered set)
+        state.seen_domains.update((d, None) for d in rw.domains)
+        if len(state.seen_domains) > 50_000:
+            # Trim oldest entries — dict preserves insertion order
+            state.seen_domains = dict.fromkeys(list(state.seen_domains)[-50_000:])
 
         nxdomain_tld_conc = 0.0
-        if rw.nxdomain > 0 and tld_counts:
-            top_tld_count = tld_counts.most_common(1)[0][1]
-            nxdomain_tld_conc = top_tld_count / n_events
+        if n_domains >= 5:
+            tld_counts = Counter()
+            for domain, count in rw.domains.items():
+                parts = domain.rsplit(".", 1)
+                if len(parts) == 2:
+                    tld_counts[parts[-1]] += count
+            if tld_counts:
+                top_tld_count     = tld_counts.most_common(1)[0][1]
+                nxdomain_tld_conc = top_tld_count / max(domain_total, 1)
 
         return {
-            "query_rate":          query_rate,
-            "unique_domains":      n_domains,
-            "blocked_ratio":       min(rw.blocked  / n_events, 1.0),
-            "nxdomain_ratio":      min(rw.nxdomain / n_events, 1.0),
-            "entropy_avg":         avg_entropy,
-            "suspicious_domains":  suspicious,
-            "total":               n_events,
-            "query_variance":      query_variance,
-            "events_per_second":   events_per_second,
-            "top_domain_ratio":    top_domain_ratio,
-            "new_domains":         new_domains_ratio,
-            "deep_domains":        deep_domains_ratio,
-            "nxdomain_tld_conc":   nxdomain_tld_conc,
+            "query_rate":         query_rate,
+            "unique_domains":     n_domains,
+            "blocked_ratio":      min(rw.blocked  / n_events, 1.0),
+            "nxdomain_ratio":     min(rw.nxdomain / n_events, 1.0),
+            "entropy_avg":        avg_entropy,
+            "suspicious_domains": suspicious,
+            "total":              n_events,
+            "query_variance":     query_variance,
+            "events_per_second":  events_per_second,
+            "top_domain_ratio":   top_domain_ratio,
+            "new_domains":        new_domains,
+            "deep_domains":       deep_domains,
+            "nxdomain_tld_conc":  nxdomain_tld_conc,
         }
 
 
 def _zero_features() -> dict:
     return {
-        "query_rate": 0.0,       "unique_domains": 0,
-        "blocked_ratio": 0.0,    "nxdomain_ratio": 0.0,
-        "entropy_avg": 0.0,      "suspicious_domains": 0,
-        "total": 0,              "query_variance": 0.0,
-        "events_per_second": 0.0,"top_domain_ratio": 0.0,
-        "new_domains": 0.0,      "deep_domains": 0.0,
-        "nxdomain_tld_conc": 0.0
+        "query_rate": 0.0,        "unique_domains": 0,
+        "blocked_ratio": 0.0,     "nxdomain_ratio": 0.0,
+        "entropy_avg": 0.0,       "suspicious_domains": 0,
+        "total": 0,               "query_variance": 0.0,
+        "events_per_second": 0.0, "top_domain_ratio": 0.0,
+        "new_domains": 0,         "deep_domains": 0,
+        "nxdomain_tld_conc": 0.0,
     }

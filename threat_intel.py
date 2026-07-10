@@ -716,6 +716,10 @@ class VirusTotalClient:
                         "expires": time.time() + 86400,  # 24h cache
                     }
                     self._today_count += 1
+                    # FIX 6: cap cache size — oldest entry evicted first.
+                    # 2000 entries × ~500 bytes = ~1 MB maximum.
+                    if len(self._cache) > 2000:
+                        del self._cache[next(iter(self._cache))]
                 self._save_cache()
                 LOGGER.debug("VT %s %s: malicious=%d suspicious=%d",
                              ioc_type, value,

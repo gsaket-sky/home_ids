@@ -21,7 +21,29 @@
   "virustotal_api_key": "",
   "ti_refresh_interval": 3600,
   "safe_ips": [
-    "127.0.0.1"
+    "127.0.0.1",
+    "192.168.178.94"
   ],
-  "device_type_overrides": {}
+  "safe_host_patterns": [
+    "pihole",
+    "pi-hole",
+    "pi_hole",
+    "pi.hole"
+  ],
+  "device_type_overrides": {},
+  "alert_json_path": "alerts.json",
+  "alert_json_max_bytes": 1073741824,
+  "_changelog_2026_06_18": [
+    "Added 192.168.178.94 to safe_ips as a Pi-hole DNS server.",
+    "Added safe_host_patterns for Pi-hole hostname exclusion.",
+    "Added alert_json_path and alert_json_max_bytes for capped JSON alert logs."
+  ],
+  "_config_notes": {
+    "window_seconds": "300s (5 min) \u2014 was 600. Faster DGA detection, matches startup_lookback",
+    "ml_warmup_samples": "5000 \u2014 was 10000. Per-device model now activates in ~2.8h not 5.5h",
+    "baseline_alpha": "0.05 kept \u2014 correct EWMA speed for rate/entropy/unique",
+    "decay_factor": "0.995 kept \u2014 correct domain count half-life of ~4.6 min",
+    "poll_interval": "2s kept \u2014 optimal, Pi-hole DB is event-driven not time-driven",
+    "alert_threshold": "6.0 kept \u2014 well-calibrated after FP sensitivity fixes"
+  }
 }
