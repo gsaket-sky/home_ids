@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
     "state_path": "state/ids_state.json",
     "model_path": "models/ids_model.pkl",
     "max_device_states": 5000,
-    "geoip_db": "geoip/GeoLite2-City.mmdb",
+    "geoip_db": "../geoiop/GeoLite2-City.mmdb",
     "telegram_enabled": True,
     "telegram_token": "",
     "telegram_chat_id": "",
