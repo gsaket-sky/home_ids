@@ -8,6 +8,9 @@ Hardened Improvements:
   - Fixed the new_domains and deep_domains count-vs-ratio evaluation bug.
   - Anchored absolute heuristic scoring rules to statistical Z-score validation.
   - Implemented an elastic low-volume dampener for quiet/sleeping windows.
+  - Added Stateful Contextual Enrichment to dampen false-positive beaconing risks.
+  - Added Probationary Guard to enforce rigid rules on unverified cold-start devices.
+  - Added Diurnal Velocity checking to adapt risk to Day/Night activity cycles.
 """
 
 def safe_float(v, default: float = 0.0) -> float:
@@ -93,7 +96,7 @@ class RiskScorer:
         # Protects quiet window cycles (total < 100) from ratio mathematical instability
         volume_dampener = 1.0 if total >= 100.0 else max(0.1, total / 100.0)
 
-        # --- IMPROVEMENT 3: STATEFUL CONTEXTUAL ENRICHMENT ---
+        # --- STATEFUL CONTEXTUAL ENRICHMENT ---
         # Evaluate if the dominant driver of this window is a long-trusted infrastructure domain
         top_domain_is_familiar = bool(features.get("top_domain_is_familiar", False))
         
@@ -105,8 +108,27 @@ class RiskScorer:
             context_dampener = 1.0
             context_detail = ""
         # -----------------------------------------------------
-        # 
-        # # Fix count-vs-ratio evaluation error for structural domain properties
+
+        # --- PROBATIONARY COLD-DEVICE DETECTION (Day-Zero Protection) ---
+        # Pull total observation ticks across both day and night indices.
+        rate_baseline_n = sum(getattr(state.rate_baseline, "n", [0, 0]))
+        
+        # If the device has fewer than 1000 historical observations, it is on probation.
+        is_on_probation = (rate_baseline_n < 1000)
+
+        if is_on_probation:
+            # Enforce strict absolute limits for unverified devices to prevent baseline poisoning
+            if total > 150 and unique_domains > 40:
+                add("Probationary volume ceiling breach", 3.5 * context_dampener, total, f"Unverified new device generating high density out-of-the-box query volumes{context_detail}")
+            
+            if nx > 0.40:
+                add("Probationary NXDOMAIN absolute breach", 3.0 * context_dampener, round(nx, 3), f"Unverified new device generating high absolute failure rates{context_detail}")
+                
+            if nd > 15:
+                add("Probationary unmapped infrastructure flood", 2.5 * context_dampener, nd, f"Device contacting substantial unique external targets on first run{context_detail}")
+        # ----------------------------------------------------------------
+        
+        # Fix count-vs-ratio evaluation error for structural domain properties
         nd_ratio = nd / max(unique_domains, 1.0)
         dd_ratio = dd / max(unique_domains, 1.0)
 
@@ -127,17 +149,19 @@ class RiskScorer:
         dns_anomaly_count = z_score_count + abs_count
 
         if z_score_count >= 1 and dns_anomaly_count >= 2:
-            add("Correlated DNS baseline deviation", 3.0 * volume_dampener, None, ", ".join(z_parts))
+            add("Correlated DNS baseline deviation", 3.0 * volume_dampener * context_dampener, None, ", ".join(z_parts) + context_detail)
             
-        # Standalone Heuristics: Anchored directly to Z-scores to prevent local configuration blocking traps
-        if nx > 0.5 and nx_z > 3.0:
-            add("NXDOMAIN ratio", (nx - 0.5) * 4 * volume_dampener, round(nx, 3), f"Failed lookups deviating from baseline (Z={nx_z:.2f})")
+        # Standalone Heuristics: Anchored directly to Z-scores to prevent local configuration blocking traps.
+        # These only evaluate for trusted/warmed-up devices (probationary devices hit the absolute checks above).
+        if not is_on_probation:
+            if nx > 0.5 and nx_z > 3.0:
+                add("NXDOMAIN ratio", (nx - 0.5) * 4 * volume_dampener * context_dampener, round(nx, 3), f"Failed lookups deviating from profile{context_detail}")
 
-        if bl > 0.85 and bl_z > 3.0 and nx > 0.2:
-            add("Blocked DNS ratio", (bl - 0.85) * 4 * volume_dampener, round(bl, 3), f"Extreme block evasion behavior (Z={bl_z:.2f})")
+            if bl > 0.85 and bl_z > 3.0 and nx > 0.2:
+                add("Blocked DNS ratio", (bl - 0.85) * 4 * volume_dampener * context_dampener, round(bl, 3), f"Extreme block evasion behavior (Z={bl_z:.2f}){context_detail}")
 
-        if sd > 0 and sd_z > 3.0:
-            add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f})")
+            if sd > 0 and sd_z > 3.0:
+                add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
 
         # Evaluating true evaluated fractions instead of absolute row counts
         if nd_ratio > 0.25 and total >= 30:
@@ -147,19 +171,25 @@ class RiskScorer:
             add("Deep DNS labels", min(dd_ratio * 4.0, 2.0) * volume_dampener, round(dd_ratio, 3), f"Deep subdomains share expansion ({int(dd)} domains)")
 
         if tc > 0.7 and nx > 0.2 and nx_z > 3.0:
-            add("NXDOMAIN TLD concentration", (tc - 0.7) * 5 * volume_dampener, round(tc, 3), "Failures concentrated in anomalous TLD structure")
+            add("NXDOMAIN TLD concentration", (tc - 0.7) * 5 * volume_dampener * context_dampener, round(tc, 3), f"Failures concentrated in anomalous TLD structure{context_detail}")
 
         # Beaconing evaluation loop
         beacon_score = 0.0
         if tdr > 0.90 and eps > 5:   beacon_score = 2.5
         elif tdr > 0.80 and eps > 3: beacon_score = 1.5
         elif tdr > 0.70 and eps > 5: beacon_score = 1.0
+        
         # If beaconing is directed to a familiar parent domain, apply context dampener
-        add("High-volume single-domain beaconing", beacon_score * volume_dampener, round(tdr, 3), f"events_per_second={eps:.2f}")
+        add("High-volume single-domain beaconing", beacon_score * volume_dampener * context_dampener, round(tdr, 3), f"events_per_second={eps:.2f}{context_detail}")
 
-        # Machine Learning Inference Parsing
+        # Machine Learning Inference Parsing (0=normal/unavailable, positive=outlier margin)
         if ml_score > 0.02:
-            add("ML anomaly", min(ml_score * 40.0, 4.0), round(ml_score, 4), "Per-device IsolationForest anomaly margin")
+            if is_on_probation:
+                # Double the threat score of global anomalies if the device is unverified
+                ml_penalty = min(ml_score * 80.0, 5.0)
+                add("ML absolute structural outlier (Probationary)", ml_penalty, round(ml_score, 4), "Device structure severely contradicts global home network cluster parameters")
+            else:
+                add("ML anomaly", min(ml_score * 40.0, 4.0), round(ml_score, 4), "Per-device IsolationForest anomaly margin")
 
         # Threat Intelligence Feed Evaluation
         ti_risk = safe_float(features.get("ti_risk", 0.0), 0.0)
@@ -209,7 +239,7 @@ class RiskScorer:
             risk *= amplifier
             add("Device sensitivity multiplier", risk - before, round(amplifier, 3), device_type)
 
-        # Baseline Risk Tracking Engine
+        # Baseline Risk Tracking Engine (Diurnal Velocity)
         risk_baseline = getattr(state, "risk_baseline", None)
         if risk_baseline:
             # Pass modern hour block down to handle diurnal risk velocity validation

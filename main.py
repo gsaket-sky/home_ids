@@ -9,21 +9,20 @@ Hardened Architectural Syncs:
 
 Advanced Security & Statistical Enhancements:
   • Diurnal Core: Time-aware metric extraction blocks for Day/Night anomaly accuracy.
-  • Peer-Group Clustering: Falls back to clustered device-type baseline models for cold devices.
+  • Peer-Group Clustering: Falls back to clustered device-type baseline models for cold devices, 
+    segregated by time-of-day.
   • Anti-Poisoning Filter: Freezes ML models & baselines instantly if a device joins infected (Day-Zero protection).
   • Stateful Enrichment: Detects familiar infrastructure to dampen false-positive beaconing risks.
+  • ML Integration Fix: Feature key bindings explicitly aligned with `ml_engine.py` vectorize matrices.
 
-Codex changelog 2026-06-18:
+Codex changelog:
   - Added explainable alert payloads with all scoring factors.
-  - Added threat-intel match details in alerts, including provider, domain, IP, hostname, and device IP.
+  - Added threat-intel match details in alerts.
   - Added capped JSON alert logging via AlertJSONWriter.
-  - Excluded safe Pi-hole/DNS hosts from state creation, scoring, metrics, and alerts.
-  - Removed stale Prometheus label series when safe devices are dropped or hostname/type labels change.
 """
 
 import argparse
 import sys
-
 import hashlib
 import json
 import logging
@@ -89,7 +88,8 @@ _GEO_CACHE_TTL = 300
 
 # =============================================================================
 # GLOBAL REGISTRY FOR PEER CLUSTERING
-# Maintain group baseline falls: device_type -> feature_name -> {"mean", "var"}
+# Maintain group baseline fallback values categorized strictly by time block.
+# Structure: device_type -> feature_name -> time_idx (0=Day, 1=Night) -> {"mean", "var"}
 # =============================================================================
 PEER_CLUSTER_REGISTRY = {}
 
@@ -142,7 +142,7 @@ def print_ids_documentation():
 # DETECTOR ENGINE DUCK-TYPING PROPERTY COUPLING PIPELINE
 # =============================================================================
 def _baseline_zscore_patch(self, val: float) -> float:
-    """Dynamically attached calculation for internal scoring.py calls."""
+    """Dynamically attached calculation for internal scoring.py calls (legacy fallback)."""
     if not getattr(self, "initialized", False) or getattr(self, "n", 0) < 30:
         return 0.0
     variance = getattr(self, "var", 1.0)
@@ -160,10 +160,7 @@ except Exception as patch_exc:
 
 
 def calculate_zscore(val: float, baseline, cap=8.0) -> float:
-    """
-    Safely calculates the Z-Score of a feature using its running baseline.
-    (Legacy flat baseline structure - kept for compatibility)
-    """
+    """Safely calculates the Z-Score using a legacy flat baseline."""
     if not getattr(baseline, 'initialized', False) or getattr(baseline, 'n', 0) < 100:
         return 0.0
     std_dev = math.sqrt(max(getattr(baseline, 'var', 1.0), 1.0))
@@ -173,27 +170,34 @@ def calculate_zscore(val: float, baseline, cap=8.0) -> float:
 
 def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
     """
-    Extracts diurnal stats based on the hour; falls back to peer cluster averages 
-    if the device profile is cold. This protects newly connected devices from 
-    anomalous scoring traps by comparing them to known 'like' device profiles.
+    Extracts diurnal stats based on the hour.
+    Falls back to peer cluster averages if the device profile is cold. 
+    This protects newly connected devices from anomalous scoring traps by comparing 
+    them to known 'like' device profiles operating in the same time block.
     """
     mean, var, initialized, n = baseline.get_stats(hour)
     
+    # 0 for Day (06:00-22:00), 1 for Night (22:00-06:00)
+    time_idx = 0 if 6 <= hour < 22 else 1  
+    
     # If this specific device baseline is warm for this time block, use it directly
     if initialized and n >= 100:
-        # Update peer cluster matrix with fresh, verified data points to continuously train peer groups
-        PEER_CLUSTER_REGISTRY.setdefault(dev_type, {}).setdefault(feature_name, {"mean": mean, "var": var})
+        # Update peer cluster matrix with fresh, verified data points
+        dev_cluster = PEER_CLUSTER_REGISTRY.setdefault(dev_type, {})
+        feat_cluster = dev_cluster.setdefault(feature_name, {})
+        feat_cluster[time_idx] = {"mean": mean, "var": var}
+        
         std_dev = math.sqrt(max(var, 1.0))
         return max(-8.0, min(8.0, (val - mean) / std_dev))
     
-    # Cold start fallback: check if peer cluster behavior templates exist
-    peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name)
+    # Cold start fallback: check if peer cluster behavior templates exist specifically for THIS time block
+    peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name, {}).get(time_idx)
     if peer_template:
         p_mean = peer_template["mean"]
         p_std  = math.sqrt(max(peer_template["var"], 1.0))
         return max(-8.0, min(8.0, (val - p_mean) / p_std))
     
-    # Absolute cold start fallback with no peer baseline history
+    # Absolute cold start fallback with no peer baseline history at all
     return 0.0
 
 
@@ -374,7 +378,7 @@ def _apply_device_type(st, dev_id: str, overrides: dict) -> None:
         st.device_type = infer_device_type(st.hostname)
 
 
-_MAX_SEEN_DOMAINS = 5_000   # reduced from 20k — saves ~60 MB on 50-device network
+_MAX_SEEN_DOMAINS = 5_000   
 
 
 def _vt_should_enqueue(domain: str, feats: dict) -> bool:
@@ -408,7 +412,6 @@ def _evaluate_intel(
     matches = []
     checked_ips: set[str] = set()
 
-    # Check exact URL matches from Zeek's http.log
     for req in zeek_http_reqs:
         url_ti = ti.lookup_url(req)
         if url_ti:
@@ -764,25 +767,31 @@ def main():
                 # Inject diurnal context for scoring pipeline
                 feats["current_hour"] = current_hour
 
-                # --- IMPROVEMENT 3: STATEFUL ENRICHMENT DETECTOR ---
+                # --- STATEFUL ENRICHMENT DETECTOR ---
                 # Find the top queried domain in this window to evaluate historical familiarity
                 if st.rolling.domains:
                     top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None)
                 else:
                     top_domain = None
                 feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
-                # ----------------------------------------------------
 
                 # Bind time-aware clustered Z-scores using adaptive peer groupings
                 feats["query_rate_z"]         = calculate_adaptive_zscore(feats["query_rate"], st.rate_baseline, "rate", st.device_type, current_hour)
                 feats["entropy_avg_z"]        = calculate_adaptive_zscore(feats["entropy_avg"], st.entropy_baseline, "entropy", st.device_type, current_hour)
                 feats["entropy_z"]            = feats["entropy_avg_z"]
                 feats["unique_domains_z"]     = calculate_adaptive_zscore(feats["unique_domains"], st.unique_baseline, "unique", st.device_type, current_hour)
+                
                 feats["nxdomain_ratio_z"]     = calculate_adaptive_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline, "nxdomain", st.device_type, current_hour)
                 feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
                 feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
+                
+                # --- ML ENGINE COMPATIBILITY MAPPING FIX ---
+                # Explicitly pass the specific key names required by the Isolation Forest Vectorizer
+                feats["nxdomain_z"] = feats["nxdomain_ratio_z"]
+                feats["blocked_z"]  = feats["blocked_ratio_z"]
+                feats["dga_z"]      = feats["suspicious_domains_z"]
 
-                # --- NEW: Dynamic Threshold Calculation with diurnal hour stats ---
+                # --- Dynamic Threshold Calculation with diurnal hour stats ---
                 std_dev_multiplier = float(CONFIG.get("threshold_std_dev", 3.0))
                 device_overrides = CONFIG.get("per_device_thresholds", {})
                 device_multiplier = device_overrides.get(st.client_ip, std_dev_multiplier)
@@ -794,7 +803,6 @@ def main():
                 else:
                     mean = 0.0
                     current_threshold_limit = 0.0
-                # ----------------------------------------------------------------
 
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
                 zeek_alerts = zeek_fx.get_alerts(st.client_ip)
@@ -817,13 +825,18 @@ def main():
                     risk_score   = risk_details["risk"]
 
                 # --- ANTI-POISONING INTEL FILTER ---
-                # If the device is exhibiting high-risk behavior or matching known IOCs,
-                # freeze its learning pipeline immediately to prevent model corruption.
-                is_poisoned = (risk_score >= 4.0 or ti_match == 1)
+                # Freeze learning pipeline immediately to prevent model corruption.
+                # Threshold raised to 7.0 to prevent freezing noise; relies heavily on
+                # absolute Threat Intel matches or Malicious TLS properties.
+                is_poisoned = (
+                    risk_score >= 7.0 or 
+                    ti_match == 1 or 
+                    feats.get("zeek_ja3_malicious", 0) > 0
+                )
 
                 if is_poisoned:
                     LOGGER.warning(
-                        "SUSPICIOUS NEW TRAFFIC DETECTED on %s (%s). "
+                        "SEVERE ANOMALY/THREAT DETECTED on %s (%s). "
                         "Freezing baseline updates to prevent memory poisoning.",
                         st.hostname, st.client_ip
                     )

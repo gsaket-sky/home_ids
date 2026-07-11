@@ -2,26 +2,24 @@
 features.py – Per-device DNS feature extraction.
 
 Fix applied (this version):
-  events_per_second previously used `time.time() - rw.start` as the
-  denominator. rw.start is set once at device creation and never resets,
-  so after the process has been running a while this denominator is huge
-  and events_per_second rounds to ~0 for every device — EXCEPT right
-  after a restart, when it is tiny and any small burst (e.g. an Echo's
-  hourly check-ins) spikes events_per_second artificially high, which
-  combined with a naturally-high top_domain_ratio (repeatedly hitting the
-  same vendor endpoint) trips the beaconing rule in scoring.py for a
-  perfectly normal device. Fixed to use window_seconds (the actual
-  analysis window) as the denominator — stable regardless of uptime.
-
-  top_domain_ratio numerator/denominator now both come from the same
-  decayed Counter sum, instead of mixing a decayed float against the
-  integer len(rw.events).
+  - Fixed NXDOMAIN TLD concentration bug: Metric now exclusively calculates the TLD density 
+    of FAILED queries, rather than all queries in the window.
+  - Removed redundant state.seen_domains memory management. State modification is now exclusively 
+    handled by the highly-optimized loop in main.py to prevent memory leaks and duplication.
+  - Aligned BLOCKED status codes with main.py (added code 10).
+  - events_per_second previously used `time.time() - rw.start` as the
+    denominator. Fixed to use window_seconds (the actual analysis window) as the 
+    denominator — stable regardless of uptime.
+  - top_domain_ratio numerator/denominator now both come from the same
+    decayed Counter sum, instead of mixing a decayed float against the
+    integer len(rw.events).
 """
 
 from collections import Counter
 from utils import entropy, suspicious_dga
 
-BLOCKED  = frozenset({1, 4, 5, 6, 7, 8})
+# Aligned completely with main.py KNOWN_BLOCKED and KNOWN_NXDOMAIN
+BLOCKED  = frozenset({1, 4, 5, 6, 7, 8, 10})
 NXDOMAIN = frozenset({3, 12, 13})
 
 
@@ -76,27 +74,28 @@ class FeatureExtractor:
         top_val          = max(rw.domains.values(), default=0)
         top_domain_ratio = top_val / domain_total
 
-        # seen_domains is an insertion-ordered dict {domain: None}.
-        # Guard against old saved states that stored it as a set.
+        # Calculate new domains by strictly reading from state memory.
+        # Modifying and trimming this dictionary is safely deferred to main.py.
         if not isinstance(getattr(state, "seen_domains", None), dict):
             state.seen_domains = {}
         new_domains = sum(1 for d in rw.domains if d not in state.seen_domains)
-        # Dict update: add new keys with None value (acts as an ordered set)
-        state.seen_domains.update((d, None) for d in rw.domains)
-        if len(state.seen_domains) > 50_000:
-            # Trim oldest entries — dict preserves insertion order
-            state.seen_domains = dict.fromkeys(list(state.seen_domains)[-50_000:])
 
+        # FIXED NXDOMAIN TLD CONCENTRATION BUG
+        # We must isolate ONLY the queries that actively failed, otherwise successful 
+        # background queries (like .com) will wash out the DGA failure signals.
         nxdomain_tld_conc = 0.0
-        if n_domains >= 5:
+        nx_events = [ev[1] for ev in rw.events if ev[2] in NXDOMAIN]
+        
+        # Only calculate concentration if there is a meaningful cluster of failures
+        if len(nx_events) >= 5:
             tld_counts = Counter()
-            for domain, count in rw.domains.items():
+            for domain in nx_events:
                 parts = domain.rsplit(".", 1)
                 if len(parts) == 2:
-                    tld_counts[parts[-1]] += count
+                    tld_counts[parts[-1]] += 1
             if tld_counts:
                 top_tld_count     = tld_counts.most_common(1)[0][1]
-                nxdomain_tld_conc = top_tld_count / max(domain_total, 1)
+                nxdomain_tld_conc = top_tld_count / len(nx_events)
 
         return {
             "query_rate":         query_rate,

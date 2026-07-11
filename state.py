@@ -26,8 +26,7 @@ v4  New baselines (Fix P):
     • risk_baseline (alpha=0.1, faster) for velocity tracking (Fix H)
     • seen_domains: set[str] – lifetime domain set for new_domains signal
       (Fix B). Persisted in to_dict() as sorted list capped at 20k entries.
-    • All new slots added to __slots__, __init__, to_dict, from_dict
-
+      
 v5  Variance floor (current version):
     • std = max(raw_std, mean×15%, 1.0) – absorbs ±20% daily variation.
       Original floor of 1e-6 caused z-scores of 10,000+ on stable devices
@@ -52,6 +51,10 @@ _MAX_DOMAINS_PER_DEVICE = 2_000
 
 
 class RollingWindow:
+    # ADDED FIXED 2.1: __slots__ allocations prevent dynamic __dict__ overhead creation,
+    # significantly lowering the execution footprint on memory-constrained appliance nodes.
+    __slots__ = ('events', 'domains', 'blocked', 'nxdomain')
+
     def __init__(self):
         # FIX 1: maxlen bounds the deque — no matter how many events
         # arrive in one burst (startup seed, chatty device), the deque
@@ -76,6 +79,9 @@ class RollingWindow:
 
 
 class BaselineMetric:
+    # ADDED FIXED 2.2: __slots__ optimization enforced for diurnal metrics container properties.
+    __slots__ = ('alpha', 'mean', 'var', 'initialized', 'n')
+
     def __init__(self, alpha: float):
         self.alpha = alpha
         # Index 0: Day (06:00 - 22:00) | Index 1: Night (22:00 - 06:00)
@@ -130,6 +136,14 @@ class BaselineMetric:
 
 
 class DeviceState:
+    # ADDED FIXED 2.3: Structural explicit definitions of __slots__ mapping to track all metrics properties cleanly.
+    __slots__ = (
+        'device_id', 'client_ip', 'hostname', 'device_type', 'last_alert_time',
+        'last_alert_risk', 'last_alert_signature', 'rolling', 'seen_domains',
+        'rate_baseline', 'entropy_baseline', 'unique_baseline', 'nxdomain_baseline',
+        'blocked_baseline', 'dga_baseline', 'risk_baseline'
+    )
+
     def __init__(self, device_id: str, client_ip: str, hostname: str, alpha: float = 0.05):
         self.device_id = device_id
         self.client_ip = client_ip
@@ -161,6 +175,8 @@ class DeviceState:
 
     def to_dict(self) -> dict:
         return {
+            # CRITICAL STRUCTURAL FIX: added device_id map property to avoid state parsing drop conditions on engine reload
+            "device_id": self.device_id,
             "client_ip": self.client_ip,
             "hostname": self.hostname,
             "device_type": self.device_type,
