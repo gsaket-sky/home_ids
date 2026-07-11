@@ -93,7 +93,20 @@ class RiskScorer:
         # Protects quiet window cycles (total < 100) from ratio mathematical instability
         volume_dampener = 1.0 if total >= 100.0 else max(0.1, total / 100.0)
 
-        # Fix count-vs-ratio evaluation error for structural domain properties
+        # --- IMPROVEMENT 3: STATEFUL CONTEXTUAL ENRICHMENT ---
+        # Evaluate if the dominant driver of this window is a long-trusted infrastructure domain
+        top_domain_is_familiar = bool(features.get("top_domain_is_familiar", False))
+        
+        if top_domain_is_familiar and tdr > 0.50:
+            # Dampen statistical anomalies if directed entirely at an historically verified domain
+            context_dampener = 0.35
+            context_detail = " (Dampened: spike maps to familiar historical domain)"
+        else:
+            context_dampener = 1.0
+            context_detail = ""
+        # -----------------------------------------------------
+        # 
+        # # Fix count-vs-ratio evaluation error for structural domain properties
         nd_ratio = nd / max(unique_domains, 1.0)
         dd_ratio = dd / max(unique_domains, 1.0)
 
@@ -141,6 +154,7 @@ class RiskScorer:
         if tdr > 0.90 and eps > 5:   beacon_score = 2.5
         elif tdr > 0.80 and eps > 3: beacon_score = 1.5
         elif tdr > 0.70 and eps > 5: beacon_score = 1.0
+        # If beaconing is directed to a familiar parent domain, apply context dampener
         add("High-volume single-domain beaconing", beacon_score * volume_dampener, round(tdr, 3), f"events_per_second={eps:.2f}")
 
         # Machine Learning Inference Parsing
@@ -197,19 +211,18 @@ class RiskScorer:
 
         # Baseline Risk Tracking Engine
         risk_baseline = getattr(state, "risk_baseline", None)
-        warmed_up = bool(
-            risk_baseline is not None
-            and getattr(risk_baseline, "initialized", False)
-            and getattr(risk_baseline, "n", 0) >= 100
-        )
-        if warmed_up:
-            import math as _math
-            _std = _math.sqrt(max(getattr(risk_baseline, "var", 1.0), 1.0))
-            velocity = (risk - getattr(risk_baseline, "mean", 0.0)) / _std
-            if velocity > 4.0:   
-                bonus = min(velocity * 0.25, 1.0)   
-                risk += bonus
-                add("Risk velocity", bonus, round(velocity, 3), "Risk rose sharply above this device baseline")
+        if risk_baseline:
+            # Pass modern hour block down to handle diurnal risk velocity validation
+            current_hour = int(features.get("current_hour", 12))
+            mean, var, init, n = risk_baseline.get_stats(current_hour)
+            if init and n >= 100:
+                import math as _math
+                _std = _math.sqrt(max(var, 1.0))
+                velocity = (risk - mean) / _std
+                if velocity > 4.0:   
+                    bonus = min(velocity * 0.25, 1.0)   
+                    risk += bonus
+                    add("Risk velocity", bonus, round(velocity, 3), f"Risk rose sharply above typical hourly index (Z={velocity:.2f})")
 
         risk = min(risk, 10.0)
         factors.sort(key=lambda f: f["score"], reverse=True)

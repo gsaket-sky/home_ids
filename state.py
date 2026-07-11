@@ -32,6 +32,12 @@ v5  Variance floor (current version):
     • std = max(raw_std, mean×15%, 1.0) – absorbs ±20% daily variation.
       Original floor of 1e-6 caused z-scores of 10,000+ on stable devices
       (a single extra DNS query looked like a 10,000-sigma event).
+
+v6  Diurnal Core:
+    • Baselines now track day/night separately (6:00–22:00 vs 22:00–6:00)
+      to avoid false alerts from diurnal traffic patterns (Fix D).
+    • BaselineMetric class added to encapsulate day/night tracking.
+    • DeviceState now has 7 BaselineMetric instances instead of 7 EWMAStat.
 """
 from collections import deque, Counter
 
@@ -72,23 +78,32 @@ class RollingWindow:
 class BaselineMetric:
     def __init__(self, alpha: float):
         self.alpha = alpha
-        self.mean = 0.0
-        self.var = 1.0
-        self.initialized = False
-        self.n = 0
+        # Index 0: Day (06:00 - 22:00) | Index 1: Night (22:00 - 06:00)
+        self.mean = [0.0, 0.0]
+        self.var = [1.0, 1.0]
+        self.initialized = [False, False]
+        self.n = [0, 0]
 
-    def update(self, val: float):
-        self.n += 1
-        if not self.initialized:
-            self.mean = val
-            self.var = 1.0
-            self.initialized = True
+    def _get_idx(self, hour: int) -> int:
+        return 0 if 6 <= hour < 22 else 1
+
+    def get_stats(self, hour: int) -> tuple[float, float, bool, int]:
+        idx = self._get_idx(hour)
+        return self.mean[idx], self.var[idx], self.initialized[idx], self.n[idx]
+    
+    def update(self, val: float, hour: int):
+        idx = self._get_idx(hour)
+        self.n[idx] += 1
+        if not self.initialized[idx]:
+            self.mean[idx] = val
+            self.var[idx] = 1.0
+            self.initialized[idx] = True
             return
 
-        old_mean = self.mean
-        self.mean = (1 - self.alpha) * old_mean + self.alpha * val
+        old_mean = self.mean[idx]
+        self.mean[idx] = (1 - self.alpha) * old_mean + self.alpha * val
         diff = val - old_mean
-        self.var = (1 - self.alpha) * self.var + self.alpha * (diff ** 2)
+        self.var[idx] = (1 - self.alpha) * self.var[idx] + self.alpha * (diff ** 2)
 
     def to_dict(self) -> dict:
         return {"alpha": self.alpha, "mean": self.mean, "var": self.var, "initialized": self.initialized, "n": self.n}
@@ -96,10 +111,21 @@ class BaselineMetric:
     @classmethod
     def from_dict(cls, d: dict) -> "BaselineMetric":
         obj = cls(d.get("alpha", 0.05))
-        obj.mean = d.get("mean", 0.0)
-        obj.var = d.get("var", 1.0)
-        obj.initialized = d.get("initialized", False)
-        obj.n = d.get("n", 0)
+        # Support conversion from older single-value structures if needed
+        if isinstance(d.get("mean"), list):
+            obj.mean = d.get("mean", [0.0, 0.0])
+            obj.var = d.get("var", [1.0, 1.0])
+            obj.initialized = d.get("initialized", [False, False])
+            obj.n = d.get("n", [0, 0])
+        else:
+            m = d.get("mean", 0.0)
+            v = d.get("var", 1.0)
+            i = d.get("initialized", False)
+            n = d.get("n", 0)
+            obj.mean = [m, m]
+            obj.var = [v, v]
+            obj.initialized = [i, i]
+            obj.n = [n, n]
         return obj
 
 

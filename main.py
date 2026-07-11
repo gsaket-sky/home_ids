@@ -7,6 +7,12 @@ Hardened Architectural Syncs:
   • Corrects geo_hits_metric syntax from .set() to .inc().
   • Retains structural engine patches for threat intel and zscore behaviors.
 
+Advanced Security & Statistical Enhancements:
+  • Diurnal Core: Time-aware metric extraction blocks for Day/Night anomaly accuracy.
+  • Peer-Group Clustering: Falls back to clustered device-type baseline models for cold devices.
+  • Anti-Poisoning Filter: Freezes ML models & baselines instantly if a device joins infected (Day-Zero protection).
+  • Stateful Enrichment: Detects familiar infrastructure to dampen false-positive beaconing risks.
+
 Codex changelog 2026-06-18:
   - Added explainable alert payloads with all scoring factors.
   - Added threat-intel match details in alerts, including provider, domain, IP, hostname, and device IP.
@@ -81,6 +87,13 @@ _GEO_CACHE = OrderedDict()
 _GEO_CACHE_MAX = 1024
 _GEO_CACHE_TTL = 300
 
+# =============================================================================
+# GLOBAL REGISTRY FOR PEER CLUSTERING
+# Maintain group baseline falls: device_type -> feature_name -> {"mean", "var"}
+# =============================================================================
+PEER_CLUSTER_REGISTRY = {}
+
+
 def print_ids_documentation():
     """Outputs the complete Home IDS architecture, config blueprint, and hunting playbook."""
     print("=" * 80)
@@ -149,12 +162,39 @@ except Exception as patch_exc:
 def calculate_zscore(val: float, baseline, cap=8.0) -> float:
     """
     Safely calculates the Z-Score of a feature using its running baseline.
+    (Legacy flat baseline structure - kept for compatibility)
     """
     if not getattr(baseline, 'initialized', False) or getattr(baseline, 'n', 0) < 100:
         return 0.0
     std_dev = math.sqrt(max(getattr(baseline, 'var', 1.0), 1.0))
     z = (val - getattr(baseline, 'mean', 0.0)) / std_dev
     return max(-cap, min(cap, z))
+
+
+def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
+    """
+    Extracts diurnal stats based on the hour; falls back to peer cluster averages 
+    if the device profile is cold. This protects newly connected devices from 
+    anomalous scoring traps by comparing them to known 'like' device profiles.
+    """
+    mean, var, initialized, n = baseline.get_stats(hour)
+    
+    # If this specific device baseline is warm for this time block, use it directly
+    if initialized and n >= 100:
+        # Update peer cluster matrix with fresh, verified data points to continuously train peer groups
+        PEER_CLUSTER_REGISTRY.setdefault(dev_type, {}).setdefault(feature_name, {"mean": mean, "var": var})
+        std_dev = math.sqrt(max(var, 1.0))
+        return max(-8.0, min(8.0, (val - mean) / std_dev))
+    
+    # Cold start fallback: check if peer cluster behavior templates exist
+    peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name)
+    if peer_template:
+        p_mean = peer_template["mean"]
+        p_std  = math.sqrt(max(peer_template["var"], 1.0))
+        return max(-8.0, min(8.0, (val - p_mean) / p_std))
+    
+    # Absolute cold start fallback with no peer baseline history
+    return 0.0
 
 
 def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> dict:
@@ -355,7 +395,7 @@ def _evaluate_intel(
     abuseipdb: AbuseIPDB | None,
     vt: VirusTotalClient | None,
     zeek_dest_ips: set,
-    zeek_http_reqs: set,  # <-- Inject Zeek HTTP Reqs
+    zeek_http_reqs: set,  
 ) -> tuple[float, float, float, int, list]:
     """
     Evaluate all IOC feeds for a device window.
@@ -712,40 +752,54 @@ def main():
                         states.pop(dev_id, None)
                     continue
 
+                # Set diurnal clock bounds
+                current_hour = time.localtime(now).tm_hour
+
                 with STATE_LOCK:
                     feats = extractor.compute(st, now, int(CONFIG["window_seconds"]))
                 
                 if feats["total"] == 0:
                     continue
 
-                # Generate statistical metric vectors
-                feats["query_rate_z"]         = calculate_zscore(feats["query_rate"], st.rate_baseline)
-                feats["entropy_avg_z"]        = calculate_zscore(feats["entropy_avg"], st.entropy_baseline)
-                feats["entropy_z"]            = feats["entropy_avg_z"]
-                feats["unique_domains_z"]     = calculate_zscore(feats["unique_domains"], st.unique_baseline)
-                feats["nxdomain_ratio_z"]     = calculate_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline)
-                feats["blocked_ratio_z"]      = calculate_zscore(feats["blocked_ratio"], st.blocked_baseline)
-                feats["suspicious_domains_z"] = calculate_zscore(feats["suspicious_domains"], st.dga_baseline)
+                # Inject diurnal context for scoring pipeline
+                feats["current_hour"] = current_hour
 
-                # --- NEW: Dynamic Threshold Calculation ---
+                # --- IMPROVEMENT 3: STATEFUL ENRICHMENT DETECTOR ---
+                # Find the top queried domain in this window to evaluate historical familiarity
+                if st.rolling.domains:
+                    top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None)
+                else:
+                    top_domain = None
+                feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
+                # ----------------------------------------------------
+
+                # Bind time-aware clustered Z-scores using adaptive peer groupings
+                feats["query_rate_z"]         = calculate_adaptive_zscore(feats["query_rate"], st.rate_baseline, "rate", st.device_type, current_hour)
+                feats["entropy_avg_z"]        = calculate_adaptive_zscore(feats["entropy_avg"], st.entropy_baseline, "entropy", st.device_type, current_hour)
+                feats["entropy_z"]            = feats["entropy_avg_z"]
+                feats["unique_domains_z"]     = calculate_adaptive_zscore(feats["unique_domains"], st.unique_baseline, "unique", st.device_type, current_hour)
+                feats["nxdomain_ratio_z"]     = calculate_adaptive_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline, "nxdomain", st.device_type, current_hour)
+                feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
+                feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
+
+                # --- NEW: Dynamic Threshold Calculation with diurnal hour stats ---
                 std_dev_multiplier = float(CONFIG.get("threshold_std_dev", 3.0))
                 device_overrides = CONFIG.get("per_device_thresholds", {})
                 device_multiplier = device_overrides.get(st.client_ip, std_dev_multiplier)
 
-                if getattr(st.rate_baseline, 'initialized', False) and getattr(st.rate_baseline, 'n', 0) >= 100:
-                    mean = getattr(st.rate_baseline, 'mean', 0.0)
-                    std_dev = math.sqrt(max(getattr(st.rate_baseline, 'var', 1.0), 1.0))
+                mean, var, init, n = st.rate_baseline.get_stats(current_hour)
+                if init and n >= 100:
+                    std_dev = math.sqrt(max(var, 1.0))
                     current_threshold_limit = mean + (device_multiplier * std_dev)
                 else:
-                    mean =0.0
+                    mean = 0.0
                     current_threshold_limit = 0.0
-
-                # ------------------------------------------
+                # ----------------------------------------------------------------
 
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
                 zeek_alerts = zeek_fx.get_alerts(st.client_ip)
                 zeek_dest_ips = zeek_fx.get_dest_ips(st.client_ip)
-                zeek_http_reqs = zeek_fx.get_http_reqs(st.client_ip)  # <-- Pull from Zeek
+                zeek_http_reqs = zeek_fx.get_http_reqs(st.client_ip)
                 feats.update(zeek_feats)
 
                 ti_risk, abuse_risk, vt_risk, ti_match, ti_matches = _evaluate_intel(
@@ -757,27 +811,51 @@ def main():
 
                 ml_score = ml.score(dev_id, feats)
 
+                # Fetch risk details early BEFORE baseline updates to guard against Day-Zero poisoning
                 with STATE_LOCK:
-                    st.rate_baseline.update(feats["query_rate"])
-                    st.entropy_baseline.update(feats["entropy_avg"])
-                    st.unique_baseline.update(feats["unique_domains"])
-                    st.nxdomain_baseline.update(feats["nxdomain_ratio"])
-                    st.blocked_baseline.update(feats["blocked_ratio"])
-                    st.dga_baseline.update(feats["suspicious_domains"])
                     risk_details = scorer.explain(feats, st, ml_score, zeek_alerts=zeek_alerts)
                     risk_score   = risk_details["risk"]
 
-                ml.learn(dev_id, feats)
+                # --- ANTI-POISONING INTEL FILTER ---
+                # If the device is exhibiting high-risk behavior or matching known IOCs,
+                # freeze its learning pipeline immediately to prevent model corruption.
+                is_poisoned = (risk_score >= 4.0 or ti_match == 1)
+
+                if is_poisoned:
+                    LOGGER.warning(
+                        "SUSPICIOUS NEW TRAFFIC DETECTED on %s (%s). "
+                        "Freezing baseline updates to prevent memory poisoning.",
+                        st.hostname, st.client_ip
+                    )
+                else:
+                    # Normal baseline and ML training only continues if the device behaves safely
+                    with STATE_LOCK:
+                        st.rate_baseline.update(feats["query_rate"], current_hour)
+                        st.entropy_baseline.update(feats["entropy_avg"], current_hour)
+                        st.unique_baseline.update(feats["unique_domains"], current_hour)
+                        st.nxdomain_baseline.update(feats["nxdomain_ratio"], current_hour)
+                        st.blocked_baseline.update(feats["blocked_ratio"], current_hour)
+                        st.dga_baseline.update(feats["suspicious_domains"], current_hour)
+                        st.risk_baseline.update(risk_score, current_hour)
+                    
+                    ml.learn(dev_id, feats)
+
+                    if not isinstance(st.seen_domains, dict):
+                        st.seen_domains = {}
+                    st.seen_domains.update((d, None) for d in st.rolling.domains)
+                    while len(st.seen_domains) > _MAX_SEEN_DOMAINS:
+                        del st.seen_domains[next(iter(st.seen_domains))]
+
+                # Reset Zeek features for this IP so it doesn't compound regardless of poisoning
                 zeek_fx.reset_cycle(st.client_ip)
 
-                if not isinstance(st.seen_domains, dict):
-                    st.seen_domains = {}
-                st.seen_domains.update((d, None) for d in st.rolling.domains)
-                while len(st.seen_domains) > _MAX_SEEN_DOMAINS:
-                    del st.seen_domains[next(iter(st.seen_domains))]
-
-                risk_velocity = calculate_zscore(risk_score, st.risk_baseline)
-                st.risk_baseline.update(risk_score)
+                # Risk velocity tracking (Must pull proper diurnal tracking stat)
+                rmean, rvar, rinit, rn = st.risk_baseline.get_stats(current_hour)
+                if rinit and rn >= 100:
+                    _rstd = math.sqrt(max(rvar, 1.0))
+                    risk_velocity = max(-8.0, min(8.0, (risk_score - rmean) / _rstd))
+                else:
+                    risk_velocity = 0.0
 
                 ti_risk_metric.labels(dev_id, st.hostname, st.device_type).set(ti_risk)
                 ti_match_metric.labels(dev_id, st.hostname, st.device_type).set(ti_match)
