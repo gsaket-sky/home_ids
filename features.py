@@ -1,21 +1,22 @@
 """
 features.py – Per-device DNS feature extraction.
 
-Fix applied (this version):
+Fixes applied (this version):
   - Fixed NXDOMAIN TLD concentration bug: Metric now exclusively calculates the TLD density 
     of FAILED queries, rather than all queries in the window.
-  - Removed redundant state.seen_domains memory management. State modification is now exclusively 
-    handled by the highly-optimized loop in main.py to prevent memory leaks and duplication.
   - Aligned BLOCKED status codes with main.py (added code 10).
-  - events_per_second previously used `time.time() - rw.start` as the
-    denominator. Fixed to use window_seconds (the actual analysis window) as the 
-    denominator — stable regardless of uptime.
-  - top_domain_ratio numerator/denominator now both come from the same
-    decayed Counter sum, instead of mixing a decayed float against the
-    integer len(rw.events).
+  - events_per_second uses window_seconds as the denominator.
+  - top_domain_ratio calculation normalized.
+  - NEW: Incorporates time-arrival pacing parameters (Jitter CV) mapping algorithmic C2 intervals.
+  
+MEMORY LEAK FIX:
+  - Completely removed the massive domain_timestamps reconstruction loop.
+    Timestamps are now natively appended in main.py, eliminating massive CPU
+    and memory slot churn overhead.
 """
 
 from collections import Counter
+import math
 from utils import entropy, suspicious_dga
 
 # Aligned completely with main.py KNOWN_BLOCKED and KNOWN_NXDOMAIN
@@ -28,6 +29,7 @@ class FeatureExtractor:
     def compute(self, state, now: float, window_seconds: int) -> dict:
         rw = state.rolling
 
+        # Sliding window eviction loop pass
         while rw.events and rw.events[0][0] < now - window_seconds:
             ts, domain, status = rw.events.popleft()
             if status in BLOCKED:
@@ -37,8 +39,15 @@ class FeatureExtractor:
             rw.domains[domain] -= 1
             if rw.domains[domain] <= 0:
                 del rw.domains[domain]
+                
+            # Clean stale timestamp lists for popped items out of sliding queues
+            if domain in rw.domain_timestamps:
+                while rw.domain_timestamps[domain] and rw.domain_timestamps[domain][0] < now - window_seconds:
+                    rw.domain_timestamps[domain].popleft()
+                if not rw.domain_timestamps[domain]:
+                    del rw.domain_timestamps[domain]
 
-        # FIX 2: cap Counter size after eviction pass
+        # Cap Counter size after eviction pass
         rw.cap_domains()
 
         n_events = len(rw.events)
@@ -48,6 +57,11 @@ class FeatureExtractor:
         entropy_sum  = 0.0
         suspicious   = 0
         deep_domains = 0
+        
+        # Timing jitter metric containers initialization
+        beaconing_c2_count = 0
+        min_jitter_cv = 999.0
+
         for domain in rw.domains:
             parts        = domain.split(".")
             entropy_sum += entropy(parts[0])
@@ -55,13 +69,27 @@ class FeatureExtractor:
                 suspicious += 1
             if len(parts) > 5:
                 deep_domains += 1
+                
+            # Compute Coefficient of Variation (Jitter CV) on domain timestamps
+            t_list = list(rw.domain_timestamps.get(domain, []))
+            if len(t_list) >= 5:
+                deltas = [t_list[i] - t_list[i-1] for i in range(1, len(t_list))]
+                mean_delta = sum(deltas) / len(deltas)
+                if mean_delta > 0:
+                    var_delta = sum((d - mean_delta) ** 2 for d in deltas) / len(deltas)
+                    std_delta = math.sqrt(var_delta)
+                    cv = std_delta / mean_delta
+                    min_jitter_cv = min(min_jitter_cv, cv)
+                    
+                    # CV < 0.1 reveals strict mechanical timing typical of automation scripts / beacons
+                    if cv < 0.1:
+                        beaconing_c2_count += 1
 
         n_domains   = len(rw.domains)
         avg_entropy = entropy_sum / max(n_domains, 1)
 
         query_rate = n_events * 60.0 / window_seconds
 
-        # Fix: use window_seconds, not wall-clock since device creation.
         events_per_second = n_events / max(window_seconds, 1)
 
         vals   = rw.domains.values()
@@ -74,15 +102,10 @@ class FeatureExtractor:
         top_val          = max(rw.domains.values(), default=0)
         top_domain_ratio = top_val / domain_total
 
-        # Calculate new domains by strictly reading from state memory.
-        # Modifying and trimming this dictionary is safely deferred to main.py.
         if not isinstance(getattr(state, "seen_domains", None), dict):
             state.seen_domains = {}
         new_domains = sum(1 for d in rw.domains if d not in state.seen_domains)
 
-        # FIXED NXDOMAIN TLD CONCENTRATION BUG
-        # We must isolate ONLY the queries that actively failed, otherwise successful 
-        # background queries (like .com) will wash out the DGA failure signals.
         nxdomain_tld_conc = 0.0
         nx_events = [ev[1] for ev in rw.events if ev[2] in NXDOMAIN]
         
@@ -111,6 +134,8 @@ class FeatureExtractor:
             "new_domains":        new_domains,
             "deep_domains":       deep_domains,
             "nxdomain_tld_conc":  nxdomain_tld_conc,
+            "beaconing_c2_count": beaconing_c2_count,                      
+            "min_jitter_cv":      min_jitter_cv if min_jitter_cv != 999.0 else 0.0  
         }
 
 
@@ -123,4 +148,6 @@ def _zero_features() -> dict:
         "events_per_second": 0.0, "top_domain_ratio": 0.0,
         "new_domains": 0,         "deep_domains": 0,
         "nxdomain_tld_conc": 0.0,
+        "beaconing_c2_count": 0,                                  
+        "min_jitter_cv": 0.0                                      
     }

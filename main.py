@@ -19,6 +19,9 @@ Codex changelog:
   - Added explainable alert payloads with all scoring factors.
   - Added threat-intel match details in alerts.
   - Added capped JSON alert logging via AlertJSONWriter.
+  - NEW: Instrumenting direct DoH bypass, lateral private scanning pivots, jitter clocks, and data exfiltration byte deviations.
+  - MEMORY FIX 1: Jitter timestamp safely appended precisely ONCE at initial ingestion.
+  - MEMORY FIX 2: Global flush of ALL Zeek data tracking maps via zeek_fx.reset_all().
 """
 
 import argparse
@@ -69,6 +72,9 @@ from metrics import (
     ml_model_loaded_metric, events_processed_metric, alerts_total,
     query_rate_baseline_mean_metric,
     query_rate_threshold_limit_metric,
+    # NEW NDR METRICS
+    ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
+    ndr_jitter_c2_metric, ndr_exfil_z_metric
 )
 
 RUNNING         = True
@@ -83,8 +89,8 @@ KNOWN_BLOCKED     = frozenset({1, 4, 5, 6, 7, 8, 10})
 KNOWN_NXDOMAIN    = frozenset({3, 12, 13})
 
 _GEO_CACHE = OrderedDict()
-_GEO_CACHE_MAX = 1024
-_GEO_CACHE_TTL = 300
+_GEO_CACHE_MAX = 10000  # INCREASED: Stops cache thrashing on heavy networks
+_GEO_CACHE_TTL = 3600   # INCREASED: IP associations don't change fast enough to warrant 5m purges
 
 # =============================================================================
 # GLOBAL REGISTRY FOR PEER CLUSTERING
@@ -208,7 +214,7 @@ def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> dict:
         _ip, geo, expiry = cached
         if now < expiry:
             _GEO_CACHE.move_to_end(domain)
-            return geo
+            return _ip, geo
 
     ip  = _resolve_safe_timeout(domain)
     geo = _geo_from_ip(geoip_engine, ip)
@@ -216,13 +222,13 @@ def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> dict:
     _GEO_CACHE.move_to_end(domain)
     if len(_GEO_CACHE) > _GEO_CACHE_MAX:
         _GEO_CACHE.popitem(last=False)
-    return geo
+    return ip, geo
 
 
 def _resolve_safe_timeout(domain: str):
     old_timeout = socket.getdefaulttimeout()
     try:
-        socket.setdefaulttimeout(1.0)
+        socket.setdefaulttimeout(0.05) # CRITICAL: Dropped from 1.0s to 50ms to prevent thread locking
         return resolve_domain(domain)
     except Exception:
         return None
@@ -338,6 +344,8 @@ _DEVICE_GAUGES = (
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
     safe_device_metric, query_rate_baseline_mean_metric,
     query_rate_threshold_limit_metric,
+    ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
+    ndr_jitter_c2_metric, ndr_exfil_z_metric
 )
 
 
@@ -399,7 +407,8 @@ def _evaluate_intel(
     abuseipdb: AbuseIPDB | None,
     vt: VirusTotalClient | None,
     zeek_dest_ips: set,
-    zeek_http_reqs: set,  
+    zeek_http_reqs: set,
+    geoip_engine: GeoIPEngine  # NEW: Pass in the engine to use the cache  
 ) -> tuple[float, float, float, int, list]:
     """
     Evaluate all IOC feeds for a device window.
@@ -483,7 +492,11 @@ def _evaluate_intel(
                 })
 
     for domain_entry in st.rolling.domains.keys():
-        resolved_ip = _resolve_safe_timeout(domain_entry) or "unknown"
+        
+        # CRITICAL FIX: Use the unified geo-cache instead of blocking resolutions
+        resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain_entry)
+        resolved_ip = resolved_ip or "unknown"
+
         domain_ti = ti.lookup_domain(domain_entry)
         if domain_ti:
             domain_score = ti.ioc_risk_score(domain=domain_entry)
@@ -734,6 +747,10 @@ def main():
 
                         st.rolling.events.append((now, domain, status))
                         st.rolling.domains[domain] += 1
+                        
+                        # MEMORY FIX 1: Jitter timestamp safely appended precisely ONCE at initial ingestion.
+                        st.rolling.domain_timestamps[domain].append(now)
+
                         if status in KNOWN_BLOCKED:
                             st.rolling.blocked += 1
                         if status in KNOWN_NXDOMAIN:
@@ -785,6 +802,9 @@ def main():
                 feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
                 feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
                 
+                # NEW: Calculate adaptive Z-Score baseline deviation for out-of-band byte transfer sizes
+                feats["outbound_bytes_z"]     = calculate_adaptive_zscore(feats.get("zeek_outbound_bytes", 0.0), st.outbound_bytes_baseline, "outbound_bytes", st.device_type, current_hour)
+
                 # --- ML ENGINE COMPATIBILITY MAPPING FIX ---
                 # Explicitly pass the specific key names required by the Isolation Forest Vectorizer
                 feats["nxdomain_z"] = feats["nxdomain_ratio_z"]
@@ -811,7 +831,7 @@ def main():
                 feats.update(zeek_feats)
 
                 ti_risk, abuse_risk, vt_risk, ti_match, ti_matches = _evaluate_intel(
-                    st, feats, ti, abuseipdb, vt, zeek_dest_ips, zeek_http_reqs,
+                    st, feats, ti, abuseipdb, vt, zeek_dest_ips, zeek_http_reqs, geoip_engine
                 )
                 feats["ti_risk"] = ti_risk
                 feats["abuseipdb_risk"] = abuse_risk
@@ -831,7 +851,9 @@ def main():
                 is_poisoned = (
                     risk_score >= 7.0 or 
                     ti_match == 1 or 
-                    feats.get("zeek_ja3_malicious", 0) > 0
+                    feats.get("zeek_ja3_malicious", 0) > 0 or
+                    feats.get("zeek_doh_bypass", 0) > 0 or 
+                    feats.get("zeek_lateral_moves", 0) > 0
                 )
 
                 if is_poisoned:
@@ -850,6 +872,8 @@ def main():
                         st.blocked_baseline.update(feats["blocked_ratio"], current_hour)
                         st.dga_baseline.update(feats["suspicious_domains"], current_hour)
                         st.risk_baseline.update(risk_score, current_hour)
+                        # NEW: Update diurnal memory arrays tracking exfiltration volume sizes
+                        st.outbound_bytes_baseline.update(feats.get("zeek_outbound_bytes", 0.0), current_hour)
                     
                     ml.learn(dev_id, feats)
 
@@ -858,9 +882,6 @@ def main():
                     st.seen_domains.update((d, None) for d in st.rolling.domains)
                     while len(st.seen_domains) > _MAX_SEEN_DOMAINS:
                         del st.seen_domains[next(iter(st.seen_domains))]
-
-                # Reset Zeek features for this IP so it doesn't compound regardless of poisoning
-                zeek_fx.reset_cycle(st.client_ip)
 
                 # Risk velocity tracking (Must pull proper diurnal tracking stat)
                 rmean, rvar, rinit, rn = st.risk_baseline.get_stats(current_hour)
@@ -874,7 +895,8 @@ def main():
                 ti_match_metric.labels(dev_id, st.hostname, st.device_type).set(ti_match)
 
                 for domain_entry, d_count in st.rolling.domains.items():
-                    geo_info = _geo_lookup_cached(geoip_engine, domain_entry)
+                    # Unpack the new tuple structure
+                    _, geo_info = _geo_lookup_cached(geoip_engine, domain_entry)
                     c_code = geo_info.get("country", "unknown")
                     c_city = geo_info.get("city", "unknown")
                     c_asn  = geo_info.get("asn", "unknown")
@@ -930,6 +952,12 @@ def main():
                     zeek_feats.get("zeek_susp_ports", 0)
                 )
 
+                # NEW: Set values to localized NDR pipeline metric hooks
+                ndr_doh_bypass_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("zeek_doh_bypass", 0))
+                ndr_lateral_moves_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("zeek_lateral_moves", 0))
+                ndr_jitter_c2_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("beaconing_c2_count", 0))
+                ndr_exfil_z_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("outbound_bytes_z", 0.0))
+
                 risk_metric.labels(dev_id, st.hostname, st.device_type).set(risk_score)
                 query_rate_metric.labels(dev_id, st.hostname, st.device_type).set(feats["query_rate"])
                 query_rate_baseline_mean_metric.labels(dev_id, st.hostname, st.device_type).set(mean)
@@ -982,6 +1010,10 @@ def main():
                     if getattr(st, "last_alert_risk", 0.0) >= alert_threshold:
                         st.last_alert_risk = 0.0
                         st.last_alert_signature = ""
+
+            # MEMORY FIX 2: Global flush of ALL Zeek data tracking maps. 
+            # Ensures non-DNS proxy flows hitting the router never sit perpetually in memory.
+            zeek_fx.reset_all()
 
             for dim_3, unique_domains_set in geo_domain_tracking.items():
                 c_code, c_city, c_asn = dim_3

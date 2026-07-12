@@ -1,3 +1,10 @@
+"""
+metrics.py - Prometheus metrics registry for Home IDS.
+
+Centralizes all telemetry definitions to ensure consistent label structures 
+and decouple metrics formatting from the main processing loop.
+"""
+
 from prometheus_client import Gauge, Counter
 
 # =========================
@@ -206,7 +213,7 @@ alerts_total = Counter(
 )
 
 # ══════════════════════════════════════════════════════════════════════════
-# NEW DETECTION SIGNAL METRICS
+# ADVANCED DETECTION SIGNAL METRICS
 # ══════════════════════════════════════════════════════════════════════════
 
 _DEV_LABELS = ["device", "hostname", "device_type"]
@@ -331,5 +338,33 @@ query_rate_baseline_mean_metric = Gauge(
 query_rate_threshold_limit_metric = Gauge(
     "home_ids_query_rate_threshold_limit",
     "Per-device dynamic query rate threshold ceiling line",
+    _DEV_LABELS,
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# NEW: ADVANCED NDR TELEMETRY (Jitter, Evasion, Lateral Movement)
+# ══════════════════════════════════════════════════════════════════════════
+
+ndr_doh_bypass_metric = Gauge(
+    "home_ids_zeek_doh_bypass",
+    "Direct DoH queries or SNI lookups intercepted",
+    _DEV_LABELS,
+)
+
+ndr_lateral_moves_metric = Gauge(
+    "home_ids_zeek_lateral_moves",
+    "Internal security lateral scanning movement actions count",
+    _DEV_LABELS,
+)
+
+ndr_jitter_c2_metric = Gauge(
+    "home_ids_beaconing_c2_count",
+    "Highly deterministic uniform periodicity C2 channel clocks tracked",
+    _DEV_LABELS,
+)
+
+ndr_exfil_z_metric = Gauge(
+    "home_ids_outbound_bytes_zscore",
+    "Payload outbound bytes baseline deviation Z-score",
     _DEV_LABELS,
 )

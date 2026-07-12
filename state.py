@@ -37,8 +37,12 @@ v6  Diurnal Core:
       to avoid false alerts from diurnal traffic patterns (Fix D).
     • BaselineMetric class added to encapsulate day/night tracking.
     • DeviceState now has 7 BaselineMetric instances instead of 7 EWMAStat.
+
+v7  Advanced NDR Feature Integration:
+    • Added domain_timestamps to tracking slots for inter-arrival pacing evaluations (Jitter CV).
+    • Added outbound_bytes_baseline to DeviceState slots to track mass data exfiltration.
 """
-from collections import deque, Counter
+from collections import deque, Counter, defaultdict
 
 # Maximum events held in the rolling window deque.
 # 50 q/min laptop × 300s window = 250 events normal peak.
@@ -51,9 +55,8 @@ _MAX_DOMAINS_PER_DEVICE = 2_000
 
 
 class RollingWindow:
-    # ADDED FIXED 2.1: __slots__ allocations prevent dynamic __dict__ overhead creation,
-    # significantly lowering the execution footprint on memory-constrained appliance nodes.
-    __slots__ = ('events', 'domains', 'blocked', 'nxdomain')
+    # UPDATED: Added domain_timestamps allocation slot to bypass standard class dictionary overhead
+    __slots__ = ('events', 'domains', 'blocked', 'nxdomain', 'domain_timestamps')
 
     def __init__(self):
         # FIX 1: maxlen bounds the deque — no matter how many events
@@ -63,6 +66,8 @@ class RollingWindow:
         self.domains  = Counter()
         self.blocked  = 0.0
         self.nxdomain = 0.0
+        # NEW: Insertion-ordered tracking queue mapping timestamp histories per unique domain
+        self.domain_timestamps = defaultdict(lambda: deque(maxlen=50))
 
     def cap_domains(self) -> None:
         """
@@ -136,12 +141,12 @@ class BaselineMetric:
 
 
 class DeviceState:
-    # ADDED FIXED 2.3: Structural explicit definitions of __slots__ mapping to track all metrics properties cleanly.
+    # UPDATED: Extended slots layout to include outbound_bytes_baseline tracking profiles
     __slots__ = (
         'device_id', 'client_ip', 'hostname', 'device_type', 'last_alert_time',
         'last_alert_risk', 'last_alert_signature', 'rolling', 'seen_domains',
         'rate_baseline', 'entropy_baseline', 'unique_baseline', 'nxdomain_baseline',
-        'blocked_baseline', 'dga_baseline', 'risk_baseline'
+        'blocked_baseline', 'dga_baseline', 'risk_baseline', 'outbound_bytes_baseline'
     )
 
     def __init__(self, device_id: str, client_ip: str, hostname: str, alpha: float = 0.05):
@@ -172,6 +177,8 @@ class DeviceState:
         self.blocked_baseline = BaselineMetric(alpha)
         self.dga_baseline = BaselineMetric(alpha)
         self.risk_baseline = BaselineMetric(0.1)
+        # NEW: Diurnal baseline initialization tracking out-of-band byte transfer metrics
+        self.outbound_bytes_baseline = BaselineMetric(alpha)
 
     def to_dict(self) -> dict:
         return {
@@ -191,6 +198,7 @@ class DeviceState:
             "blocked_baseline": self.blocked_baseline.to_dict(),
             "dga_baseline": self.dga_baseline.to_dict(),
             "risk_baseline": self.risk_baseline.to_dict(),
+            "outbound_bytes_baseline": self.outbound_bytes_baseline.to_dict(), # NEW: Save tracking metric
             "seen_domains": list(self.seen_domains),
         }
 
@@ -209,6 +217,7 @@ class DeviceState:
         if "blocked_baseline" in d: obj.blocked_baseline = BaselineMetric.from_dict(d["blocked_baseline"])
         if "dga_baseline" in d: obj.dga_baseline = BaselineMetric.from_dict(d["dga_baseline"])
         if "risk_baseline" in d: obj.risk_baseline = BaselineMetric.from_dict(d["risk_baseline"])
+        if "outbound_bytes_baseline" in d: obj.outbound_bytes_baseline = BaselineMetric.from_dict(d["outbound_bytes_baseline"]) # NEW: Restore tracking metric
         
         # Restore seen_domains as insertion-ordered dict regardless of
         # what format it was saved in (list from old code, or dict keys).

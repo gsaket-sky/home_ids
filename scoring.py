@@ -11,6 +11,7 @@ Hardened Improvements:
   - Added Stateful Contextual Enrichment to dampen false-positive beaconing risks.
   - Added Probationary Guard to enforce rigid rules on unverified cold-start devices.
   - Added Diurnal Velocity checking to adapt risk to Day/Night activity cycles.
+  - NDR UPGRADES: Processes Jitter coefficient scores, DoH proxy evasion actions, and Private Subnet Lateral scanner pivots.
 """
 
 def safe_float(v, default: float = 0.0) -> float:
@@ -93,42 +94,30 @@ class RiskScorer:
         unique_domains = safe_float(features.get("unique_domains", 1.0), 1.0)
 
         # Dynamic Low-Volume Dampener Matrix
-        # Protects quiet window cycles (total < 100) from ratio mathematical instability
         volume_dampener = 1.0 if total >= 100.0 else max(0.1, total / 100.0)
 
-        # --- STATEFUL CONTEXTUAL ENRICHMENT ---
-        # Evaluate if the dominant driver of this window is a long-trusted infrastructure domain
+        # Stateful Contextual Enrichment
         top_domain_is_familiar = bool(features.get("top_domain_is_familiar", False))
         
         if top_domain_is_familiar and tdr > 0.50:
-            # Dampen statistical anomalies if directed entirely at an historically verified domain
             context_dampener = 0.35
             context_detail = " (Dampened: spike maps to familiar historical domain)"
         else:
             context_dampener = 1.0
             context_detail = ""
-        # -----------------------------------------------------
 
-        # --- PROBATIONARY COLD-DEVICE DETECTION (Day-Zero Protection) ---
-        # Pull total observation ticks across both day and night indices.
+        # Probationary Cold-Device Detection (Day-Zero Protection)
         rate_baseline_n = sum(getattr(state.rate_baseline, "n", [0, 0]))
-        
-        # If the device has fewer than 1000 historical observations, it is on probation.
         is_on_probation = (rate_baseline_n < 1000)
 
         if is_on_probation:
-            # Enforce strict absolute limits for unverified devices to prevent baseline poisoning
             if total > 150 and unique_domains > 40:
                 add("Probationary volume ceiling breach", 3.5 * context_dampener, total, f"Unverified new device generating high density out-of-the-box query volumes{context_detail}")
-            
             if nx > 0.40:
                 add("Probationary NXDOMAIN absolute breach", 3.0 * context_dampener, round(nx, 3), f"Unverified new device generating high absolute failure rates{context_detail}")
-                
             if nd > 15:
                 add("Probationary unmapped infrastructure flood", 2.5 * context_dampener, nd, f"Device contacting substantial unique external targets on first run{context_detail}")
-        # ----------------------------------------------------------------
         
-        # Fix count-vs-ratio evaluation error for structural domain properties
         nd_ratio = nd / max(unique_domains, 1.0)
         dd_ratio = dd / max(unique_domains, 1.0)
 
@@ -141,7 +130,6 @@ class RiskScorer:
         if nx > 0.3 and nx_z > 3.0: z_parts.append(f"nxdomain_ratio={nx:.2f}(Z={nx_z:.1f})")
         if bl > 0.7 and bl_z > 3.0 and nx > 0.15: z_parts.append(f"blocked_ratio={bl:.2f}(Z={bl_z:.1f})")
 
-        # Correlated anomalies must be validated against actual baseline variance
         abs_count = sum([
             nx > 0.3 and nx_z > 3.0,
             bl > 0.7 and bl_z > 3.0 and nx > 0.15,
@@ -151,19 +139,14 @@ class RiskScorer:
         if z_score_count >= 1 and dns_anomaly_count >= 2:
             add("Correlated DNS baseline deviation", 3.0 * volume_dampener * context_dampener, None, ", ".join(z_parts) + context_detail)
             
-        # Standalone Heuristics: Anchored directly to Z-scores to prevent local configuration blocking traps.
-        # These only evaluate for trusted/warmed-up devices (probationary devices hit the absolute checks above).
         if not is_on_probation:
             if nx > 0.5 and nx_z > 3.0:
                 add("NXDOMAIN ratio", (nx - 0.5) * 4 * volume_dampener * context_dampener, round(nx, 3), f"Failed lookups deviating from profile{context_detail}")
-
             if bl > 0.85 and bl_z > 3.0 and nx > 0.2:
                 add("Blocked DNS ratio", (bl - 0.85) * 4 * volume_dampener * context_dampener, round(bl, 3), f"Extreme block evasion behavior (Z={bl_z:.2f}){context_detail}")
-
             if sd > 0 and sd_z > 3.0:
                 add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
 
-        # Evaluating true evaluated fractions instead of absolute row counts
         if nd_ratio > 0.25 and total >= 30:
             add("First-seen domain burst", min(nd_ratio * 4.0, 2.0) * volume_dampener, round(nd_ratio, 3), f"New infrastructure share expansion ({int(nd)} domains)")
 
@@ -173,19 +156,15 @@ class RiskScorer:
         if tc > 0.7 and nx > 0.2 and nx_z > 3.0:
             add("NXDOMAIN TLD concentration", (tc - 0.7) * 5 * volume_dampener * context_dampener, round(tc, 3), f"Failures concentrated in anomalous TLD structure{context_detail}")
 
-        # Beaconing evaluation loop
         beacon_score = 0.0
         if tdr > 0.90 and eps > 5:   beacon_score = 2.5
         elif tdr > 0.80 and eps > 3: beacon_score = 1.5
         elif tdr > 0.70 and eps > 5: beacon_score = 1.0
         
-        # If beaconing is directed to a familiar parent domain, apply context dampener
         add("High-volume single-domain beaconing", beacon_score * volume_dampener * context_dampener, round(tdr, 3), f"events_per_second={eps:.2f}{context_detail}")
 
-        # Machine Learning Inference Parsing (0=normal/unavailable, positive=outlier margin)
         if ml_score > 0.02:
             if is_on_probation:
-                # Double the threat score of global anomalies if the device is unverified
                 ml_penalty = min(ml_score * 80.0, 5.0)
                 add("ML absolute structural outlier (Probationary)", ml_penalty, round(ml_score, 4), "Device structure severely contradicts global home network cluster parameters")
             else:
@@ -207,6 +186,23 @@ class RiskScorer:
 
         zeek_ports = safe_float(features.get("zeek_susp_ports", 0), 0.0)
         add("Suspicious destination port", min(zeek_ports * 1.5, 3.0), zeek_ports, "Outbound connection to suspicious port")
+
+        # ── NEW ADVANCED DETECTION SCORING PENALTIES ─────────────────────────
+        c2_jitter_count = safe_float(features.get("beaconing_c2_count", 0), 0.0)
+        if c2_jitter_count > 0:
+            add("C2 Jitter Clock Verification", 4.0 * volume_dampener * context_dampener, c2_jitter_count, "Uniform periodicity check-in sequences tracked")
+
+        doh_bypass_count = safe_float(features.get("zeek_doh_bypass", 0), 0.0)
+        if doh_bypass_count > 0:
+            add("DoH Tunneling Bypass Evasion", 5.0, doh_bypass_count, "Encrypted DNS lookup queries bypassing local network gateway filters")
+
+        lateral_moves_count = safe_float(features.get("zeek_lateral_moves", 0), 0.0)
+        if lateral_moves_count > 0:
+            add("Internal Lateral Movement", 6.0, lateral_moves_count, "Subnet security scanning violations targeting core infrastructure ports")
+
+        outbound_bytes_z = safe_float(features.get("outbound_bytes_z", 0.0), 0.0)
+        if outbound_bytes_z > 5.0:
+            add("Exfiltration Payload Burst", 3.5 * volume_dampener, round(outbound_bytes_z, 2), f"Outbound transfer byte metrics severely breaking distribution bounds")
 
         _BENIGN_ZEEK_WEIRD = frozenset({
             "weird:data_before_established",
@@ -242,7 +238,6 @@ class RiskScorer:
         # Baseline Risk Tracking Engine (Diurnal Velocity)
         risk_baseline = getattr(state, "risk_baseline", None)
         if risk_baseline:
-            # Pass modern hour block down to handle diurnal risk velocity validation
             current_hour = int(features.get("current_hour", 12))
             mean, var, init, n = risk_baseline.get_stats(current_hour)
             if init and n >= 100:

@@ -1,0 +1,229 @@
+{
+  "__inputs": [{"name": "DS_PROMETHEUS","label": "Prometheus","type": "datasource","pluginId": "prometheus"}],
+  "__requires": [{"type": "grafana","id": "grafana","name": "Grafana","version": "10.0.0"}],
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "id": 1000,
+      "type": "row",
+      "title": "🔴 System & Script Health",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1}
+    },
+    {
+      "id": 10001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 1, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Monitors the physical health of your Python engine, SQLite database, and Zeek collectors.\n* 🟢 **Normal:** Collector lag < 2 seconds. The Script Memory Footprint is a flat, horizontal line. Alert Queue stays at 0.\n* 🔴 **Abnormal / Threat:** A diagonal memory line indicates a leak. Lag > 15s means the Pi-hole database is locked. Anti-Poisoning Freezes > 0 means the script detected a Day-Zero threat and intentionally locked its own learning memory to prevent baseline poisoning."
+      },
+      "transparent": true
+    },
+    {"id":1,"type":"stat","title":"ML Model Status","gridPos":{"x":0,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_ml_model_loaded","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":2,"type":"stat","title":"Collector Lag","gridPos":{"x":3,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":3,"type":"stat","title":"Alert Queue Size","gridPos":{"x":6,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_alert_queue_size","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":4,"type":"stat","title":"Alerts Fired (last 1h)","gridPos":{"x":9,"y":4,"w":3,"h":4},"targets":[{"expr":"increase(home_ids_alerts_total[1h])","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":5,"type":"stat","title":"Events / min","gridPos":{"x":12,"y":4,"w":3,"h":4},"targets":[{"expr":"rate(home_ids_events_processed_total[10m]) * 60","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":502,"type":"stat","title":"Anti-Poisoning Freezes","gridPos":{"x":15,"y":4,"w":4,"h":4},"targets":[{"expr":"count(home_ids_risk_score >= 7.0) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":8,"type":"timeseries","title":"Collector Lag Trend","gridPos":{"x":19,"y":4,"w":5,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10,"lineWidth":1}}}},
+    {"id":501,"type":"timeseries","title":"Script Memory Footprint (Slots)","gridPos":{"x":0,"y":8,"w":8,"h":5},"targets":[{"expr":"process_resident_memory_bytes{job=\"home_ids\"} / 1024 / 1024","legendFormat":"RSS (MB)","refId":"A"}],"fieldConfig":{"defaults":{"unit":"megabytes","custom":{"fillOpacity":10,"lineWidth":2}}}},
+    {"id":503,"type":"timeseries","title":"Alert Pipeline Backlog","gridPos":{"x":8,"y":8,"w":8,"h":5},"targets":[{"expr":"home_ids_alert_queue_size","legendFormat":"Queue","refId":"A"},{"expr":"rate(home_ids_alerts_total[5m])*60","legendFormat":"Alerts/min","refId":"B"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":5,"lineWidth":2}}}},
+    {"id":504,"type":"timeseries","title":"SQLite WAL Velocity vs Lag","gridPos":{"x":16,"y":8,"w":8,"h":5},"targets":[{"expr":"home_ids_collector_lag_seconds","legendFormat":"Lag (s)","refId":"A"},{"expr":"rate(home_ids_events_processed_total[5m])","legendFormat":"Ingest/s","refId":"B"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2}}}},
+
+    {
+      "id": 2000,
+      "type": "row",
+      "title": "🌐 Overall Network View",
+      "gridPos": {"x": 0, "y": 13, "w": 24, "h": 1}
+    },
+    {
+      "id": 20001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 14, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Your 30,000-foot daily driver. It provides a macro view of every device and immediately highlights rule-breakers.\n* 🟢 **Normal:** The 'Severe Threats' counter is 0. On the corridor chart, the solid live traffic lines stay comfortably beneath the dotted 'Threat Limit' ceiling.\n* 🔴 **Abnormal / Threat:** Solid traffic lines breaking violently through the top of the dotted Threat Limit line. Any device glowing red (Score > 7.0) in the Threat Ledger requires immediate investigation below."
+      },
+      "transparent": true
+    },
+    {"id":6,"type":"stat","title":"Active Devices","gridPos":{"x":0,"y":17,"w":3,"h":4},"targets":[{"expr":"count(home_ids_risk_score) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":7,"type":"stat","title":"Severe Threats (Risk ≥ 8)","gridPos":{"x":3,"y":17,"w":3,"h":4},"targets":[{"expr":"count(home_ids_risk_score >= 8) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":12,"type":"stat","title":"Live Baseline Breaches","gridPos":{"x":6,"y":17,"w":4,"h":4},"targets":[{"expr":"count(home_ids_query_rate > home_ids_query_rate_threshold_limit) or vector(0)","refId":"A"}],"options":{"colorMode":"background"},"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
+    {"id":90,"type":"stat","title":"Engine Max Risk","gridPos":{"x":10,"y":17,"w":4,"h":4},"targets":[{"expr":"max(home_ids_risk_score{hostname=~\"$device\"})","refId":"A"}]},
+    {"id":92,"type":"timeseries","title":"Pipeline EPS","gridPos":{"x":14,"y":17,"w":5,"h":4},"targets":[{"expr":"rate(home_ids_events_processed_total[10m]) * 60","refId":"A"}]},
+    {"id":93,"type":"timeseries","title":"Pipeline Alerts","gridPos":{"x":19,"y":17,"w":5,"h":4},"targets":[{"expr":"rate(home_ids_alerts_total[10m]) * 300","refId":"A"}]},
+    {"id":10,"type":"timeseries","title":"Risk Score Timeline — All Devices","gridPos":{"x":0,"y":21,"w":12,"h":8},"targets":[{"expr":"home_ids_risk_score{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10,"lineWidth":1},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":8,"color":"red"}]}}}},
+    {"id":20,"type":"timeseries","title":"Threat Thresholds vs Safe Baseline Corridor (Query Rate)","gridPos":{"x":12,"y":21,"w":12,"h":8},"targets":[{"expr":"home_ids_query_rate{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Live","refId":"A"},{"expr":"home_ids_query_rate_baseline_mean{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Mean","refId":"B"},{"expr":"home_ids_query_rate_threshold_limit{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Limit","refId":"C"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2,"fillOpacity":0}},"overrides":[{"matcher":{"id":"byRegexp","options":".*Mean.*"},"properties":[{"id":"custom.lineStyle","value":{"fill":"dash","dash":[10,10]}},{"id":"custom.lineWidth","value":1}]},{"matcher":{"id":"byRegexp","options":".*Limit.*"},"properties":[{"id":"custom.lineStyle","value":{"fill":"dash","dash":[5,5]}},{"id":"custom.fillBelowTo","value":".*Mean.*"},{"id":"custom.fillOpacity","value":15},{"id":"color","value":{"mode":"fixed","fixedColor":"red"}}]}]}},
+    {"id":80,"type":"table","title":"All Devices — Baseline & Threat Ledger","gridPos":{"x":0,"y":29,"w":24,"h":10},"targets":[{"expr":"home_ids_risk_score{hostname=~\"$device\"}","format":"table","instant":true,"refId":"A"},{"expr":"home_ids_query_rate{hostname=~\"$device\"}","format":"table","instant":true,"refId":"B"},{"expr":"home_ids_ml_anomaly_score{hostname=~\"$device\"}","format":"table","instant":true,"refId":"C"},{"expr":"home_ids_ti_risk{hostname=~\"$device\"}","format":"table","instant":true,"refId":"D"},{"expr":"home_ids_zeek_ja3_malicious{hostname=~\"$device\"}","format":"table","instant":true,"refId":"E"}],"transformations":[{"id":"joinByField","options":{"byField":"hostname","mode":"outer"}},{"id":"organize","options":{"excludeByName":{"Time":true,"__name__":true,"device":true},"renameByName":{"Value #A":"Live Risk","Value #B":"Queries/min","Value #C":"ML Score","Value #D":"TI Threat","Value #E":"JA3 Hash","device_type":"Type","hostname":"Hostname"}}},{"id":"sortBy","options":{"fields":[{"desc":true,"displayName":"Live Risk"}]}}],"fieldConfig":{"defaults":{"custom":{"align":"center"}},"overrides":[{"matcher":{"id":"byName","options":"Hostname"},"properties":[{"id":"custom.align","value":"left"}]},{"matcher":{"id":"byName","options":"Live Risk"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"yellow"},{"value":6,"color":"red"}]}}]},{"matcher":{"id":"byName","options":"TI Threat"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":0.5,"color":"red"}]}}]},{"matcher":{"id":"byName","options":"JA3 Hash"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":0.5,"color":"red"}]}}]}]}},
+
+    {
+      "id": 3000,
+      "type": "row",
+      "title": "🚨 Threat: Threat Intelligence & Deterministic Malware",
+      "gridPos": {"x": 0, "y": 39, "w": 24, "h": 1}
+    },
+    {
+      "id": 30001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 40, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Skips behavioral guesswork and looks for absolute, verified malware signatures using integrated feeds (AbuseIPDB, URLhaus, VirusTotal) and Zeek TLS fingerprints.\n* 🟢 **Normal:** These panels should be completely flat at zero.\n* 🔴 **Abnormal / Threat:** JA3 Hits > 0 means a device is initiating an encrypted connection using the exact TLS handshake of known malware (Cobalt Strike, Trickbot). TI Risk Spikes mean a device successfully connected to an explicitly listed global hacker blocklist."
+      },
+      "transparent": true
+    },
+    {"id":401,"type":"timeseries","title":"TI Feed Match Risk","gridPos":{"x":0,"y":43,"w":8,"h":8},"targets":[{"expr":"home_ids_ti_risk{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":403,"type":"timeseries","title":"TI Hits by Feed","gridPos":{"x":8,"y":43,"w":8,"h":8},"targets":[{"expr":"rate(home_ids_ti_ioc_hits_total[10m])*300","legendFormat":"{{source}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+    {"id":411,"type":"timeseries","title":"JA3 Malicious TLS Hits","gridPos":{"x":16,"y":43,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_ja3_malicious{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+
+    {
+      "id": 4000,
+      "type": "row",
+      "title": "🚨 Threat: Ransomware & DGA (Domain Generation Algorithms)",
+      "gridPos": {"x": 0, "y": 51, "w": 24, "h": 1}
+    },
+    {
+      "id": 40001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 52, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Domain Generation Algorithms (DGAs) are used by ransomware and botnets to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a live command server.\n* 🟢 **Normal:** NXDOMAIN (failed lookup) ratios hover below 10%. New domains occasionally bump up when visiting new websites.\n* 🔴 **Abnormal / Threat:** A massive, simultaneous vertical spike in 'New Domains' and the 'NXDOMAIN Ratio'. If NXDOMAIN TLD Concentration hits > 80%, the malware is hyper-focusing its failed guesses on a specific Top Level Domain (like `.ru` or `.cc`)."
+      },
+      "transparent": true
+    },
+    {"id":311,"type":"timeseries","title":"New Domains (DGA Burst)","gridPos":{"x":0,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_new_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":31,"type":"timeseries","title":"Suspicious / DGA Domains","gridPos":{"x":8,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+    {"id":30,"type":"timeseries","title":"NXDOMAIN Ratio (DGA Indicator)","gridPos":{"x":16,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_nxdomain_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":32,"type":"timeseries","title":"DNS Entropy Avg","gridPos":{"x":0,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_entropy_avg{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":321,"type":"timeseries","title":"NXDOMAIN TLD Concentration","gridPos":{"x":8,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":333,"type":"timeseries","title":"DGA Z-Score","gridPos":{"x":16,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_zscore_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+
+    {
+      "id": 5000,
+      "type": "row",
+      "title": "🚨 Threat: C2 Beaconing & Jitter",
+      "gridPos": {"x": 0, "y": 71, "w": 24, "h": 1}
+    },
+    {
+      "id": 50001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 72, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Malware 'beacons' or 'calls home' to a hacker's server periodically. Advanced malware does this slowly (e.g., exactly once every 5 minutes) to evade volume-based detection.\n* 🟢 **Normal:** Human web browsing is erratic and random. The Jitter chart should be completely empty.\n* 🔴 **Abnormal / Threat:** A bar appearing here means Zeek/Pi-hole tracked requests to a single destination with mechanical, robotic timing precision (a Coefficient of Variation under 10%). This is a confirmed, active Command & Control channel."
+      },
+      "transparent": true
+    },
+    {"id":803,"type":"timeseries","title":"Machine C2 Beaconing (Jitter CV < 0.1)","gridPos":{"x":0,"y":75,"w":12,"h":8},"targets":[{"expr":"home_ids_beaconing_c2_count{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20}}}},
+    {"id":222,"type":"timeseries","title":"Beaconing Timeline","gridPos":{"x":12,"y":75,"w":12,"h":8},"targets":[{"expr":"rate(home_ids_geo_beaconing_total[10m]) * 300","legendFormat":"{{country}} / {{asn}}","refId":"A"}]},
+
+    {
+      "id": 6000,
+      "type": "row",
+      "title": "🚨 Threat: DNS Tunneling & Data Exfiltration",
+      "gridPos": {"x": 0, "y": 83, "w": 24, "h": 1}
+    },
+    {
+      "id": 60001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 84, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Attackers steal data either by sneaking it out through long DNS subdomains (e.g., `stolen-password-string.hacker.com`) or by blasting a massive TCP/UDP upload.\n* 🟢 **Normal:** Deep Domains stay near zero (standard websites rarely use >4 sub-labels). The Outbound Bytes Z-Score casually fluctuates between -2 and +2.\n* 🔴 **Abnormal / Threat:** Continuous high counts of Deep Domains mean data is being actively exfiltrated via DNS tunneling. An Exfiltration Z-Score > 5.0 means a massive payload was uploaded, completely shattering historical baselines."
+      },
+      "transparent": true
+    },
+    {"id":312,"type":"timeseries","title":"Deep Domains (Tunnelling)","gridPos":{"x":0,"y":87,"w":12,"h":8},"targets":[{"expr":"home_ids_deep_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":804,"type":"timeseries","title":"TCP/UDP Data Exfiltration Z-Score (Outbound Zeek Bytes)","gridPos":{"x":12,"y":87,"w":12,"h":8},"targets":[{"expr":"home_ids_outbound_bytes_zscore{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2,"drawStyle":"line"},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"orange"},{"value":5,"color":"red"}]}}}},
+
+    {
+      "id": 7000,
+      "type": "row",
+      "title": "🚨 Threat: Defense Evasion & Lateral Movement",
+      "gridPos": {"x": 0, "y": 95, "w": 24, "h": 1}
+    },
+    {
+      "id": 70001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 96, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Catches devices trying to bypass your Pi-hole entirely, or compromised internal devices turning around and attacking other devices on your home network.\n* 🟢 **Normal:** All panels are completely flat at zero.\n* 🔴 **Abnormal / Threat:** DoH Bypass > 0 means a device (often a smart TV or malware) is hardcoded to use Cloudflare/Google DNS directly via HTTPS, blinding your Pi-hole. Lateral Movement > 0 is critical: an internal device is actively port-scanning or attempting SSH/SMB connections against another private device (worm spreading)."
+      },
+      "transparent": true
+    },
+    {"id":801,"type":"timeseries","title":"DoH Bypass Attempts (Cloudflare, Google, Quad9)","gridPos":{"x":0,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_doh_bypass{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
+    {"id":802,"type":"timeseries","title":"Internal Lateral Movement (SSH, RDP, SMB scanning)","gridPos":{"x":8,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_lateral_moves{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
+    {"id":412,"type":"timeseries","title":"Suspicious Ext Ports","gridPos":{"x":16,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_suspicious_ports{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+
+    {
+      "id": 8000,
+      "type": "row",
+      "title": "🤖 Threat: ML Behavioral Anomalies & Z-Scores",
+      "gridPos": {"x": 0, "y": 107, "w": 24, "h": 1}
+    },
+    {
+      "id": 80001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 108, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** The IsolationForest AI engine finds stealthy, 'living-off-the-land' attacks that keep their volume low enough to bypass human-made thresholds.\n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Abnormal / Threat:** ML Score > 0.05 means the AI detected a structural matrix shift (the pattern of traffic is fundamentally alien to that device's history). High Risk Velocity indicates the risk score shot up violently compared to its own rolling hourly average."
+      },
+      "transparent": true
+    },
+    {"id":40,"type":"timeseries","title":"ML Anomaly Score (IsolationForest)","gridPos":{"x":0,"y":111,"w":12,"h":8},"targets":[{"expr":"home_ids_ml_anomaly_score{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":41,"type":"stat","title":"Max ML Score","gridPos":{"x":12,"y":111,"w":4,"h":8},"targets":[{"expr":"max(home_ids_ml_anomaly_score{hostname=~\"$device\"})","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":301,"type":"timeseries","title":"Risk Velocity Z-Score","gridPos":{"x":16,"y":111,"w":8,"h":8},"targets":[{"expr":"home_ids_risk_velocity{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {"id":21,"type":"timeseries","title":"Baseline Deviations (Z-Scores) — Behavioral Threats","gridPos":{"x":0,"y":119,"w":24,"h":8},"targets":[{"expr":"home_ids_zscore_query_rate{hostname=~\"$device\"}","legendFormat":"{{hostname}} Query-Z","refId":"A"},{"expr":"home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}} NX-Z","refId":"B"},{"expr":"home_ids_zscore_blocked_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}} Block-Z","refId":"C"},{"expr":"home_ids_zscore_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}} DGA-Z","refId":"D"}],"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"yellow"},{"value":6,"color":"red"}]}}}},
+
+    {
+      "id": 9000,
+      "type": "row",
+      "title": "🌍 Geographic Intelligence & Threat Maps",
+      "gridPos": {"x": 0, "y": 127, "w": 24, "h": 1}
+    },
+    {
+      "id": 90001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 128, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this section:** Visual mapping of where your network packets are physically landing. (Bubble Size = Traffic Volume; Bubble Color = Threat Level).\n* 🟢 **Normal:** Large green bubbles over your home country, the US, and standard infrastructure hubs (AWS, Azure, Google).\n* 🔴 **Abnormal / Threat:** Red bubbles over high-risk jurisdictions. The 'C2 Beaconing Maps' panel lighting up on a specific foreign ASN, showing exactly where a compromised device is sending its check-ins."
+      },
+      "transparent": true
+    },
+    {"id":201,"type":"geomap","title":"Geo Threat Map (Size = Volume, Color = Threat Level)","gridPos":{"x":0,"y":131,"w":16,"h":12},"targets":[{"expr":"home_ids_geo_risk","format":"table","instant":true,"refId":"A"},{"expr":"home_ids_geo_traffic_total","format":"table","instant":true,"refId":"B"}],"transformations":[{"id":"joinByField","options":{"byField":"latitude","mode":"outer"}},{"id":"organize","options":{"excludeByName":{"Time":true,"Time 1":true,"__name__":true,"__name__ 1":true}}}],"options":{"layers":[{"type":"markers","location":{"mode":"coords","latitude":"latitude","longitude":"longitude"},"color":{"field":"Value #A","mode":"thresholds"},"size":{"field":"Value #B","max":40,"min":5},"opacity":0.65}]}},
+    {"id":202,"type":"geomap","title":"Threat Density (Country)","gridPos":{"x":16,"y":131,"w":8,"h":12},"targets":[{"expr":"home_ids_country_threat_density","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8}}]}},
+    {"id":211,"type":"geomap","title":"DNS Query Rate by Location","gridPos":{"x":0,"y":143,"w":16,"h":12},"targets":[{"expr":"home_ids_geo_queries_per_minute","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"coords","latitude":"latitude","longitude":"longitude"},"color":{"field":"Value","mode":"thresholds"},"size":{"field":"Value","max":35,"min":4}}]}},
+    {"id":212,"type":"geomap","title":"Total Traffic by Country","gridPos":{"x":16,"y":143,"w":8,"h":12},"targets":[{"expr":"sum by(country) (count_over_time(home_ids_geo_traffic_total[1h]))","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"field":"Value","max":25,"min":4}}]}},
+    {"id":221,"type":"geomap","title":"C2 Beaconing Maps","gridPos":{"x":0,"y":155,"w":16,"h":12},"targets":[{"expr":"sum by (country) (increase(home_ids_geo_beaconing_total[1h]))","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8},"opacity":0.5}]}},
+    {"id":231,"type":"geomap","title":"Entropy by Country","gridPos":{"x":16,"y":155,"w":8,"h":12},"targets":[{"expr":"avg by (country) (home_ids_geo_entropy)","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8}}]}}
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["home-ids","master", "ndr", "documented"],
+  "templating": {"list": [{"current": {"text": "All","value": "$__all"},"datasource": {"type": "prometheus","uid": "${DS_PROMETHEUS}"},"includeAll": true,"multi": true,"name": "device","query": "label_values(home_ids_risk_score, hostname)","refresh": 1,"type": "query"}]},
+  "time": {"from": "now-1h","to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Home IDS — Master Categorized NDR Map",
+  "uid": "home-ids-ndr-categorized-v12",
+  "version": 1
+}
