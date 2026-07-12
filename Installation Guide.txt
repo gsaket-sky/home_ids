@@ -1,0 +1,127 @@
+Here is the complete, step-by-step installation and deployment guide for the Home SOC IDS.
+
+This guide assumes you are deploying the script on a Linux host (like your server sky) that is already running Pi-hole and Zeek.
+
+Prerequisites
+Before installing the Python engine, ensure the host system has the required underlying infrastructure running and accessible:
+
+Pi-hole: Must be actively running. The script requires read access to /etc/pihole/pihole-FTL.db.
+
+Zeek: Must be actively monitoring your network interface. Logs should be outputting to /opt/zeek/logs/current/.
+
+Python 3.9+: Required for the Machine Learning and async features.
+
+Step 1: Prepare the Environment
+Create a dedicated directory for the IDS, set up the storage folders, and establish a Python virtual environment to keep dependencies clean.
+
+Bash
+# Create the main directory
+sudo mkdir -p /opt/home-ids
+cd /opt/home-ids
+
+# Create the required state and model directories
+sudo mkdir -p state models logs
+
+# Create a Python virtual environment
+sudo python3 -m venv venv
+
+# Activate the virtual environment
+source venv/bin/activate
+
+Step 2: Install Python Dependencies
+The engine requires specific libraries for machine learning, Prometheus metrics, and data handling. With your virtual environment activated, install the requirements:
+
+Bash
+pip install scikit-learn numpy requests prometheus-client watchdog
+Step 3: Core Configuration
+Create your config.json file. This is where you will define your Telegram bot credentials, safe-listed devices (like the Pi-hole host and your router to prevent loop-alerting), and feature toggles.
+
+Bash
+sudo nano config.json
+Paste the following template and adjust the values for your network:
+
+JSON
+{
+  "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
+  "telegram_chat_id": "YOUR_CHAT_ID_HERE",
+  "pihole_db_path": "/etc/pihole/pihole-FTL.db",
+  "zeek_logs_path": "/opt/zeek/logs/current",
+  "safe_ips": [
+    "192.168.178.1",  
+    "192.168.178.12", 
+    "127.0.0.1"
+  ],
+  "ml_settings": {
+    "contamination": 0.05,
+    "warmup_samples": 100
+  },
+  "prometheus_port": 8000
+}
+Save and exit (Ctrl+O, Enter, Ctrl+X).
+
+Step 4: Permissions (Crucial Step)
+The script needs permission to read the Pi-hole SQLite database and the Zeek logs. The safest way to do this without running the script as root is to add your user (or the service user) to the appropriate groups.
+
+Bash
+# Add your user to the Pi-hole group to read the FTL.db
+sudo usermod -aG pihole $USER
+
+# Ensure the Zeek logs directory is readable
+sudo chmod -R 755 /opt/zeek/logs/current
+
+Step 5: Create the Systemd Service
+To ensure the IDS runs persistently in the background and starts automatically on boot, create a systemd service file.
+
+Bash
+sudo nano /etc/systemd/system/myscript.service
+Add the following configuration (adjust User and WorkingDirectory if you installed it somewhere else):
+
+Ini, TOML
+[Unit]
+Description=Home SOC IDS
+After=network.target pihole-FTL.service zeek.service
+
+[Service]
+Type=simple
+User=root
+# Running as root is sometimes necessary for Zeek/Pi-hole strict permissions, 
+# but a dedicated user with group access is preferred.
+WorkingDirectory=/opt/home-ids
+Environment="PATH=/opt/home-ids/venv/bin"
+ExecStart=/opt/home-ids/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+Reload the systemd daemon, enable the service, and start it:
+
+Bash
+sudo systemctl daemon-reload
+sudo systemctl enable myscript.service
+sudo systemctl start myscript.service
+
+Step 6: Verify the Engine is Running
+Check the live logs to ensure the Pi-hole database is connected in WAL mode, the Zeek tailer is active, and the ML models are initializing.
+
+Bash
+sudo journalctl -u myscript.service -f
+(You should see the initialization sequence, including the Threat Intel refresh and baseline loader, matching your previous operational logs).
+
+Step 7: Connect Prometheus & Grafana
+The Python script is now exposing live telemetry metrics on port 8000.
+
+Configure Prometheus: Open your prometheus.yml file and add the IDS as a scrape target:
+
+YAML
+scrape_configs:
+  - job_name: 'home_ids'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['localhost:8000']
+Restart Prometheus: sudo systemctl restart prometheus
+
+Import Dashboard: Open Grafana, go to Dashboards -> Import, and paste the monolithic JSON payload from our previous step (home_ids_master_production.json). Select your Prometheus data source when prompted.
+
+Day-Zero Expectations
+For the first few hours, the Machine Learning dashboard panels will display 0.0 or "NOT LOADED". This is normal. The engine is actively filling its rolling memory arrays and categorizing your devices. Once a device hits the warmup_samples threshold, the AI model will compile, and you will see the Safe Corridors and Z-scores appear on your Grafana charts.

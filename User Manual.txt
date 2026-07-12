@@ -1,0 +1,111 @@
+🛡️ HOME SOC IDS: Administrator Operations Manual
+Version: 8.0 (Diurnal AI & Peer Clustering Edition)
+System Purpose: A Python-driven, AI-powered intrusion detection system built to secure home networks by analyzing DNS telemetry and network flow behavior.
+
+1. System Architecture Overview
+The Home IDS operates as a real-time, stateful stream-processing engine. It does not simply look at individual packets; it builds "memories" of how devices behave and compares current behavior against historical norms.
+
+The architecture is divided into five sequential layers:
+
+Ingestion Layer:
+
+Pi-hole FTL Collector: Reads DNS queries directly from the local SQLite WAL (Write-Ahead Log) database every 2 seconds without blocking Pi-hole's writing process.
+
+Zeek Log Tailer: Monitors live network flow protocols (conn.log, notice.log, weird.log) to catch threats that bypass DNS (e.g., hardcoded IP malware).
+
+State & Memory Layer (state.py):
+
+Maintains Exponentially Weighted Moving Averages (EWMA) for every device on the network.
+
+Splits baseline tracking into Day (06:00–22:00) and Night (22:00–06:00) matrices.
+
+Feature Extraction Layer (features.py):
+
+Translates raw packet data into statistical metrics (Entropy, Ratios, Z-Scores) over a rolling 5-minute window.
+
+Threat Intel & AI Layer (threat_intel.py, ml_engine.py):
+
+Static Analysis: Checks OTX, AbuseIPDB, VirusTotal, and Abuse.ch for known bad actors.
+
+Behavioral Analysis: Feeds the metrics into a per-device IsolationForest machine learning model to detect zero-day or stealth anomalies.
+
+Scoring & Alerting Layer (scoring.py, alerts.py):
+
+Calculates a final Risk Score (0.0 to 10.0).
+
+Dispatches payloads to local JSON logs and the Telegram bot if the alert threshold is breached.
+
+2. Core Operating Principles
+The "Safe Corridor" Concept
+The system uses statistical standard deviation (Z-Scores) to create a dynamic "Safe Corridor" for every device. An IoT smart plug and a gaming PC have vastly different traffic volumes. The IDS calculates the mean (average) query rate and the variance for each specific device by time of day. A threat is only triggered when a device violates its own physical history, not a global network average.
+
+Cold Start & Peer Clustering
+When a brand-new device joins the network (or after a system wipe), it has no history. The IDS places it under a Probationary Guard (relying on absolute limits) while simultaneously checking the Peer Cluster Registry. It will temporarily grade the new device against the established baseline of similar device types (e.g., grading a new iPhone against the baseline of existing iPhones) until it collects 100 localized data points.
+
+Anti-Poisoning Guardrails
+If a device is infected with malware the moment it joins the network, the malware's traffic would normally become part of the device's "baseline," rendering the IDS blind. The Anti-Poisoning Guardrail freezes the Machine Learning pipeline and baseline updates instantly if a device hits a severe risk threshold (> 7.0) or matches a deterministic threat intel hash, ensuring the model never learns malicious behavior as "normal."
+
+3. Threat Hunting Playbook: Signal Combinations
+The true power of this script lies in combinations. Individual alerts can sometimes be false positives, but when specific metrics spike together, it reveals the exact nature of the malware.
+
+Use this playbook when looking at your Grafana Dashboard or analyzing a Telegram alert.
+
+🔴 Scenario A: Ransomware or DGA Burst
+The Concept: Malware families use Domain Generation Algorithms (DGAs) to guess thousands of randomized, gibberish domains (e.g., xkqztp.ru, mzblqw.ru) hoping one is an active command server.
+The Combination to Look For:
+
+High New Domains (Spike): The device is querying dozens of domains it has never seen before.
+
+High NXDOMAIN Ratio (> 0.4): Most of the DGA guesses fail because the domains don't exist.
+
+High DGA Z-Score: The entropy (randomness of the letters) triggers the mathematical heuristic.
+
+High TLD Concentration: The malware is concentrating all its guesses on a specific Top Level Domain (like .ru, .xyz, or .cc).
+
+Action: Disconnect the device immediately. Ransomware is actively attempting to pull its encryption keys.
+
+🔴 Scenario B: Command & Control (C2) Beaconing
+The Concept: A compromised device has successfully connected to a hacker's infrastructure and is "checking in" silently every few minutes waiting for a command.
+The Combination to Look For:
+
+Elevated Risk Velocity Z-Score (> 3.0): The device's risk score suddenly jumped relative to its own baseline, even if the absolute volume is low.
+
+Zeek JA3 Malicious Hit (> 0): The TLS handshake matches known offensive frameworks like Cobalt Strike, Sliver, or Metasploit.
+
+High Geo Beaconing Count: Persistent, rhythmic communication to a specific, unusual country or ASN.
+
+Elevated Top Domain Ratio: The device is abandoning normal browsing rhythms and focusing heavily on one single destination.
+
+Action: Check the "Top Beaconing ASNs" table in Grafana to identify the exact IP/Domain owning the C2 channel.
+
+🔴 Scenario C: DNS Tunnelling (Data Exfiltration)
+The Concept: Attackers are bypassing your firewall by encoding stolen data into the subdomains of DNS requests (e.g., password-file-chunk-1.attacker.com).
+The Combination to Look For:
+
+High Deep Domains Count (> 0): Domains with more than 5 sub-labels are extremely rare in legitimate traffic.
+
+Extreme Entropy Z-Score: The subdomains are heavily encrypted/base64-encoded strings, causing maximum randomness.
+
+High Unique Domains Count: Every chunk of stolen data requires a completely unique domain string.
+
+Action: Check the raw DNS logs for the specific base domain receiving the deep subdomain queries and block it at the Pi-hole level.
+
+🔴 Scenario D: Stealth Malware / Living-off-the-Land
+The Concept: The attacker is using legitimate tools (like Windows Update or Google Drive) to hide their tracks. Z-Scores look normal, volume looks normal, and Pi-hole blocks are at 0%.
+The Combination to Look For:
+
+Elevated ML Anomaly Score (> 0.08): The IsolationForest AI engine has detected a structural shifting inside the multi-feature data matrix that human rules missed.
+
+Flat / Normal Z-Scores: The standard deviations are quiet.
+
+Action: The AI sees something humans can't. Look at the device's Zeek conn.log to see if it is making direct IP connections (bypassing DNS entirely) via the Zeek New IPs metric.
+
+🔴 Scenario E: Internal Network Scanning / Worm Propagation
+The Concept: An infected IoT device or laptop is trying to spread laterally across your home network.
+The Combination to Look For:
+
+High Suspicious Ports Count: Outbound connections attempting to reach ports 4444 (Metasploit), 31337 (Backdoors), or standard SMB/SSH ports on internal peers.
+
+Spike in Zeek Protocol Anomalies: A surge in notice.log and weird.log events as the scanner throws malformed packets at your other devices.
+
+Action: Isolate the infected device to a guest VLAN to prevent lateral infection.
