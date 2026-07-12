@@ -20,8 +20,8 @@ Codex changelog:
   - Added threat-intel match details in alerts.
   - Added capped JSON alert logging via AlertJSONWriter.
   - NEW: Instrumenting direct DoH bypass, lateral private scanning pivots, jitter clocks, and data exfiltration byte deviations.
-  - MEMORY FIX 1: Jitter timestamp safely appended precisely ONCE at initial ingestion.
-  - MEMORY FIX 2: Global flush of ALL Zeek data tracking maps via zeek_fx.reset_all().
+  - PERFORMANCE V3: Asynchronous Background DNS threading eliminates OS socket timeouts. 
+    Prometheus and Threat Intel checks are globally aggregated to destroy CPU loop churn.
 """
 
 import argparse
@@ -34,7 +34,8 @@ import time
 import threading
 import socket
 import math
-from collections import OrderedDict, Counter
+import concurrent.futures
+from collections import OrderedDict, Counter, defaultdict
 from pathlib import Path
 
 from prometheus_client import start_http_server
@@ -49,13 +50,16 @@ from scoring import RiskScorer
 from ml_engine import MLRegistry
 from alerts import AlertManager, AlertJSONWriter
 from geoip_engine import GeoIPEngine
+
 from utils import (
     normalize_domain,
     sanitize_hostname,
     resolve_domain,
     infer_device_type,
     suspicious_dga,
+    entropy as _ent_fn  # Pulled global import out of loop to save IO cycles
 )
+
 from metrics import (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
     blocked_ratio_metric, nxdomain_ratio_metric, suspicious_domains_metric,
@@ -88,17 +92,12 @@ MAX_STATES        = int(CONFIG.get("max_device_states", 5000))
 KNOWN_BLOCKED     = frozenset({1, 4, 5, 6, 7, 8, 10})
 KNOWN_NXDOMAIN    = frozenset({3, 12, 13})
 
-_GEO_CACHE = OrderedDict()
-_GEO_CACHE_MAX = 10000  # INCREASED: Stops cache thrashing on heavy networks
-_GEO_CACHE_TTL = 3600   # INCREASED: IP associations don't change fast enough to warrant 5m purges
-
 # =============================================================================
 # GLOBAL REGISTRY FOR PEER CLUSTERING
 # Maintain group baseline fallback values categorized strictly by time block.
 # Structure: device_type -> feature_name -> time_idx (0=Day, 1=Night) -> {"mean", "var"}
 # =============================================================================
 PEER_CLUSTER_REGISTRY = {}
-
 
 def print_ids_documentation():
     """Outputs the complete Home IDS architecture, config blueprint, and hunting playbook."""
@@ -164,7 +163,6 @@ try:
 except Exception as patch_exc:
     LOGGER.warning("Could not execute structural baseline property bindings: %s", patch_exc)
 
-
 def calculate_zscore(val: float, baseline, cap=8.0) -> float:
     """Safely calculates the Z-Score using a legacy flat baseline."""
     if not getattr(baseline, 'initialized', False) or getattr(baseline, 'n', 0) < 100:
@@ -172,7 +170,6 @@ def calculate_zscore(val: float, baseline, cap=8.0) -> float:
     std_dev = math.sqrt(max(getattr(baseline, 'var', 1.0), 1.0))
     z = (val - getattr(baseline, 'mean', 0.0)) / std_dev
     return max(-cap, min(cap, z))
-
 
 def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
     """
@@ -206,35 +203,51 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
     # Absolute cold start fallback with no peer baseline history at all
     return 0.0
 
+# =============================================================================
+# ASYNCHRONOUS DNS RESOLUTION & CACHING ENGINE
+# Eliminates thread-blocking OS lockouts on DGA bursts or unknown routing domains
+# =============================================================================
+_GEO_CACHE = OrderedDict()
+_GEO_CACHE_MAX = 15000  
+_GEO_CACHE_TTL = 3600   
+_CACHE_LOCK = threading.Lock()
+_DNS_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=20, thread_name_prefix="ids_dns")
 
-def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> dict:
-    now = time.time()
-    cached = _GEO_CACHE.get(domain)
-    if cached is not None:
-        _ip, geo, expiry = cached
-        if now < expiry:
-            _GEO_CACHE.move_to_end(domain)
-            return _ip, geo
-
-    ip  = _resolve_safe_timeout(domain)
-    geo = _geo_from_ip(geoip_engine, ip)
-    _GEO_CACHE[domain] = (ip, geo, now + _GEO_CACHE_TTL)
-    _GEO_CACHE.move_to_end(domain)
-    if len(_GEO_CACHE) > _GEO_CACHE_MAX:
-        _GEO_CACHE.popitem(last=False)
-    return ip, geo
-
-
-def _resolve_safe_timeout(domain: str):
-    old_timeout = socket.getdefaulttimeout()
+def _bg_resolve(domain: str, geoip_engine: GeoIPEngine):
+    """Background worker resolving DNS without halting the main pipeline."""
     try:
-        socket.setdefaulttimeout(0.05) # CRITICAL: Dropped from 1.0s to 50ms to prevent thread locking
-        return resolve_domain(domain)
+        ip = resolve_domain(domain)
+        geo = _geo_from_ip(geoip_engine, ip)
     except Exception:
-        return None
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+        ip = None
+        geo = _unknown_geo()
+        
+    with _CACHE_LOCK:
+        _GEO_CACHE[domain] = (ip, geo, time.time() + _GEO_CACHE_TTL)
 
+def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> tuple:
+    """O(1) cache read. Never blocks. Defers misses to the thread pool."""
+    now = time.time()
+    with _CACHE_LOCK:
+        cached = _GEO_CACHE.get(domain)
+        if cached is not None:
+            _ip, geo, expiry = cached
+            if now < expiry:
+                _GEO_CACHE.move_to_end(domain)
+                return _ip, geo
+
+        # IMMEDIATELY cache an "unknown" entry with a 30-second TTL to prevent 
+        # spawning hundreds of redundant threads for the exact same domain burst.
+        _GEO_CACHE[domain] = (None, _unknown_geo(), now + 30)
+        _GEO_CACHE.move_to_end(domain)
+        
+        if len(_GEO_CACHE) > _GEO_CACHE_MAX:
+            _GEO_CACHE.popitem(last=False)
+            
+    # Spawn the resolution in the background. Main thread never waits.
+    _DNS_POOL.submit(_bg_resolve, domain, geoip_engine)
+    
+    return None, _unknown_geo()
 
 def _geo_from_ip(geoip_engine: GeoIPEngine, ip) -> dict:
     if not ip:
@@ -252,13 +265,12 @@ def _geo_from_ip(geoip_engine: GeoIPEngine, ip) -> dict:
     geo.setdefault("longitude", "0")
     return geo
 
-
 def _unknown_geo() -> dict:
     return {
         "country": "unknown", "city": "unknown", "continent": "unknown",
         "latitude": "0", "longitude": "0", "asn": "unknown", "org": "unknown",
     }
-
+# =============================================================================
 
 def load_states(path: str, alpha: float) -> "OrderedDict":
     p = Path(path)
@@ -275,7 +287,6 @@ def load_states(path: str, alpha: float) -> "OrderedDict":
         LOGGER.warning("Could not load state from %s — starting fresh", path)
         return OrderedDict()
 
-
 def save_states(states: "OrderedDict", path: str) -> None:
     p = Path(path)
     try:
@@ -290,12 +301,10 @@ def save_states(states: "OrderedDict", path: str) -> None:
     except Exception as exc:
         LOGGER.warning("Could not save state to %s: %s", path, exc)
 
-
 def shutdown(*_):
     global RUNNING
     RUNNING = False
     _SHUTDOWN_EVENT.set()
-
 
 def setup_logging():
     level = CONFIG.get("log_level", "INFO").upper()
@@ -304,19 +313,15 @@ def setup_logging():
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-
 def stable_device_id(raw_client: str) -> str:
     return hashlib.sha256(raw_client.encode("utf-8", errors="ignore")).hexdigest()[:12]
-
 
 def trim_states(states: OrderedDict):
     while len(states) > MAX_STATES:
         states.popitem(last=False)
 
-
 def _safe_pattern_set(patterns) -> set[str]:
     return {str(p).lower() for p in (patterns or []) if str(p).strip()}
-
 
 def _is_safe_device(client_ip: str, hostname: str, safe_ips: set, safe_host_patterns: set) -> bool:
     ip = str(client_ip or "").strip()
@@ -325,13 +330,11 @@ def _is_safe_device(client_ip: str, hostname: str, safe_ips: set, safe_host_patt
         return True
     return any(pattern in host for pattern in safe_host_patterns)
 
-
 def _drop_safe_states(states: OrderedDict, safe_ips: set, safe_host_patterns: set) -> None:
     for dev_id, st in list(states.items()):
         if _is_safe_device(st.client_ip, st.hostname, safe_ips, safe_host_patterns):
             _remove_device_metric_labels(dev_id, st.hostname, st.device_type)
             states.pop(dev_id, None)
-
 
 _DEVICE_GAUGES = (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
@@ -348,18 +351,16 @@ _DEVICE_GAUGES = (
     ndr_jitter_c2_metric, ndr_exfil_z_metric
 )
 
-
 def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str) -> None:
     if not dev_id or not hostname or not device_type:
         return
     for metric in _DEVICE_GAUGES:
         try:
-            metric.remove(dev_id, hostname, device_type)
+            metric.remove(str(dev_id), str(hostname), str(device_type))
         except KeyError:
             pass
         except Exception:
             LOGGER.debug("Could not remove stale metric labels for %s/%s", dev_id, hostname)
-
 
 def safe_ti_check(ti_obj, domain: str) -> bool:
     """Return True if domain matches any loaded threat-intel feed."""
@@ -374,7 +375,6 @@ def safe_ti_check(ti_obj, domain: str) -> bool:
         pass
     return False
 
-
 def _apply_device_type(st, dev_id: str, overrides: dict) -> None:
     if st.client_ip in overrides:
         st.device_type = overrides[st.client_ip]
@@ -385,9 +385,7 @@ def _apply_device_type(st, dev_id: str, overrides: dict) -> None:
     if st.device_type == "unknown":
         st.device_type = infer_device_type(st.hostname)
 
-
 _MAX_SEEN_DOMAINS = 5_000   
-
 
 def _vt_should_enqueue(domain: str, feats: dict) -> bool:
     """Pre-filter domains worth a VirusTotal lookup (rate-limited API)."""
@@ -399,7 +397,6 @@ def _vt_should_enqueue(domain: str, feats: dict) -> bool:
         return True
     return False
 
-
 def _evaluate_intel(
     st,
     feats: dict,
@@ -408,7 +405,7 @@ def _evaluate_intel(
     vt: VirusTotalClient | None,
     zeek_dest_ips: set,
     zeek_http_reqs: set,
-    geoip_engine: GeoIPEngine  # NEW: Pass in the engine to use the cache  
+    global_ti_cache: dict  # Pre-computed map to avoid internal mutex contention
 ) -> tuple[float, float, float, int, list]:
     """
     Evaluate all IOC feeds for a device window.
@@ -439,7 +436,7 @@ def _evaluate_intel(
             })
             ti_ioc_hits_total.labels(source="threat_intel", ioc_type="url").inc()
 
-    def _check_ip(ip: str) -> None:
+    def _check_ip(ip: str, ip_ti: dict=None, ip_score: float=0.0) -> None:
         nonlocal ti_risk, abuse_risk, vt_risk, any_match
         if not ip or ip in checked_ips:
             return
@@ -460,9 +457,11 @@ def _evaluate_intel(
             if vt:
                 vt.enqueue_ip(ip, priority=2)
 
-        ip_ti = ti.lookup_ip(ip)
+        if not ip_ti:
+            ip_ti = ti.lookup_ip(ip)
+            ip_score = ti.ioc_risk_score(ip=ip) if ip_ti else 0.0
+
         if ip_ti:
-            ip_score = ti.ioc_risk_score(ip=ip)
             ti_risk = max(ti_risk, ip_score)
             any_match = 1
             matches.append({
@@ -492,21 +491,20 @@ def _evaluate_intel(
                 })
 
     for domain_entry in st.rolling.domains.keys():
+        # Tap into the globally pre-computed cache to skip redundant checks
+        entry = global_ti_cache.get(domain_entry)
+        if not entry: continue
         
-        # CRITICAL FIX: Use the unified geo-cache instead of blocking resolutions
-        resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain_entry)
-        resolved_ip = resolved_ip or "unknown"
-
-        domain_ti = ti.lookup_domain(domain_entry)
+        domain_ti = entry["domain_ti"]
         if domain_ti:
-            domain_score = ti.ioc_risk_score(domain=domain_entry)
+            domain_score = entry["domain_score"]
             ti_risk = max(ti_risk, domain_score)
             any_match = 1
             matches.append({
                 "provider": domain_ti.get("source", "threat_intel"),
                 "ioc_type": "domain",
                 "domain": domain_entry,
-                "ip": resolved_ip,
+                "ip": entry["ip"],
                 "hostname": st.hostname or "unknown",
                 "device_ip": st.client_ip or "unknown",
                 "confidence": domain_ti.get("confidence"),
@@ -530,19 +528,18 @@ def _evaluate_intel(
                     "provider": "virustotal",
                     "ioc_type": "domain",
                     "domain": domain_entry,
-                    "ip": resolved_ip,
+                    "ip": entry["ip"],
                     "hostname": st.hostname or "unknown",
                     "device_ip": st.client_ip or "unknown",
                     "risk": domain_vt_risk,
                 })
 
-        _check_ip(resolved_ip)
+        _check_ip(entry["ip"], entry["ip_ti"], entry["ip_score"])
 
     for ip in zeek_dest_ips:
         _check_ip(ip)
 
     return ti_risk, abuse_risk, vt_risk, any_match, matches
-
 
 def _format_alert_message(payload: dict) -> str:
     device = payload["device"]
@@ -562,7 +559,6 @@ def _format_alert_message(payload: dict) -> str:
             ioc = match.get("domain") or match.get("ip") or "unknown"
             lines.append(f"- {match.get('provider', 'unknown')} {match.get('ioc_type')}: {ioc} ip={match.get('ip', 'unknown')} host={match.get('hostname', 'unknown')}")
     return "\n".join(lines)[:3900]
-
 
 def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
                          alert_threshold: float, signature: str,
@@ -586,11 +582,9 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
         "zeek_alerts": zeek_alerts or [],
     }
 
-
 def main():
     global RUNNING
 
-    # Set up argument parser for terminal documentation injection
     parser = argparse.ArgumentParser(description="Home IDS Threat Hunting Engine Processing Daemon")
     parser.add_main = parser.add_argument(
         "--info", action="store_true", help="Display interactive system architecture, config blueprint, and hunting playbook"
@@ -748,22 +742,78 @@ def main():
                         st.rolling.events.append((now, domain, status))
                         st.rolling.domains[domain] += 1
                         
-                        # MEMORY FIX 1: Jitter timestamp safely appended precisely ONCE at initial ingestion.
+                        # Jitter timestamp safely appended precisely ONCE at initial ingestion.
                         st.rolling.domain_timestamps[domain].append(now)
 
                         if status in KNOWN_BLOCKED:
                             st.rolling.blocked += 1
                         if status in KNOWN_NXDOMAIN:
                             st.rolling.nxdomain += 1
+                            
+                        # INGESTION PHASE: Increment Traffic Geography Exact 1x Per Packet
+                        _, geo_info = _geo_lookup_cached(geoip_engine, domain)
+                        c_code = geo_info.get("country", "unknown")
+                        c_asn = geo_info.get("asn", "unknown")
+                        
+                        geo_traffic_total.labels(
+                            str(c_code), str(geo_info.get("city", "unknown")), str(geo_info.get("continent", "unknown")),
+                            str(c_asn), str(geo_info.get("org", "unknown")), 
+                            str(geo_info.get("latitude", "0")), str(geo_info.get("longitude", "0"))
+                        ).inc(1)
+                        
+                        if c_code in ["RU", "CN", "IR", "KP"]:
+                            geo_hits_metric.labels(str(c_code), str(c_asn)).inc(1)
             else:
                 collector_lag_metric.set(0.0)
 
             with STATE_LOCK:
                 active_devices = list(states.items())
 
-            geo_country_counts = Counter()
-            geo_device_tracking = {}
-            geo_domain_tracking = {}
+            # =========================================================================
+            # GLOBAL AGGREGATION PHASE: Slashes Mutex and Prometheus Label Loops
+            # =========================================================================
+            global_domain_counts = Counter()
+            global_device_tracking = defaultdict(set)
+            
+            for dev_id, st in active_devices:
+                for d, c in st.rolling.domains.items():
+                    global_domain_counts[d] += c
+                    global_device_tracking[d].add(dev_id)
+
+            # 1. Build Pre-Computed Threat Intel Map (O(Unique Domains) instead of O(Devices x Domains))
+            global_ti_cache = {}
+            for domain in global_domain_counts.keys():
+                resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain)
+                resolved_ip = resolved_ip or "unknown"
+                domain_ti = ti.lookup_domain(domain)
+                ip_ti = ti.lookup_ip(resolved_ip)
+                
+                global_ti_cache[domain] = {
+                    "ip": resolved_ip,
+                    "domain_ti": domain_ti,
+                    "ip_ti": ip_ti,
+                    "domain_score": ti.ioc_risk_score(domain=domain) if domain_ti else 0.0,
+                    "ip_score": ti.ioc_risk_score(ip=resolved_ip) if ip_ti else 0.0,
+                }
+
+            # 2. Build High-Cardinality Geo Groupings
+            unique_geos = {}
+            for domain, d_count in global_domain_counts.items():
+                _, geo_info = _geo_lookup_cached(geoip_engine, domain)
+                dim_qpm = (
+                    str(geo_info.get("country", "unknown")),
+                    str(geo_info.get("city", "unknown")),
+                    str(geo_info.get("asn", "unknown")),
+                    str(geo_info.get("org", "unknown")),
+                    str(geo_info.get("continent", "unknown")),
+                    str(geo_info.get("latitude", "0")),
+                    str(geo_info.get("longitude", "0"))
+                )
+                if dim_qpm not in unique_geos:
+                    unique_geos[dim_qpm] = {"count": 0, "domains": set(), "devices": set()}
+                unique_geos[dim_qpm]["count"] += d_count
+                unique_geos[dim_qpm]["domains"].add(domain)
+                unique_geos[dim_qpm]["devices"].update(global_device_tracking[domain])
 
             for dev_id, st in active_devices:
                 if _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns):
@@ -785,7 +835,6 @@ def main():
                 feats["current_hour"] = current_hour
 
                 # --- STATEFUL ENRICHMENT DETECTOR ---
-                # Find the top queried domain in this window to evaluate historical familiarity
                 if st.rolling.domains:
                     top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None)
                 else:
@@ -801,12 +850,9 @@ def main():
                 feats["nxdomain_ratio_z"]     = calculate_adaptive_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline, "nxdomain", st.device_type, current_hour)
                 feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
                 feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
-                
-                # NEW: Calculate adaptive Z-Score baseline deviation for out-of-band byte transfer sizes
                 feats["outbound_bytes_z"]     = calculate_adaptive_zscore(feats.get("zeek_outbound_bytes", 0.0), st.outbound_bytes_baseline, "outbound_bytes", st.device_type, current_hour)
 
                 # --- ML ENGINE COMPATIBILITY MAPPING FIX ---
-                # Explicitly pass the specific key names required by the Isolation Forest Vectorizer
                 feats["nxdomain_z"] = feats["nxdomain_ratio_z"]
                 feats["blocked_z"]  = feats["blocked_ratio_z"]
                 feats["dga_z"]      = feats["suspicious_domains_z"]
@@ -826,12 +872,10 @@ def main():
 
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
                 zeek_alerts = zeek_fx.get_alerts(st.client_ip)
-                zeek_dest_ips = zeek_fx.get_dest_ips(st.client_ip)
-                zeek_http_reqs = zeek_fx.get_http_reqs(st.client_ip)
                 feats.update(zeek_feats)
 
                 ti_risk, abuse_risk, vt_risk, ti_match, ti_matches = _evaluate_intel(
-                    st, feats, ti, abuseipdb, vt, zeek_dest_ips, zeek_http_reqs, geoip_engine
+                    st, feats, ti, abuseipdb, vt, zeek_fx.get_dest_ips(st.client_ip), zeek_fx.get_http_reqs(st.client_ip), global_ti_cache
                 )
                 feats["ti_risk"] = ti_risk
                 feats["abuseipdb_risk"] = abuse_risk
@@ -845,9 +889,6 @@ def main():
                     risk_score   = risk_details["risk"]
 
                 # --- ANTI-POISONING INTEL FILTER ---
-                # Freeze learning pipeline immediately to prevent model corruption.
-                # Threshold raised to 7.0 to prevent freezing noise; relies heavily on
-                # absolute Threat Intel matches or Malicious TLS properties.
                 is_poisoned = (
                     risk_score >= 7.0 or 
                     ti_match == 1 or 
@@ -863,7 +904,6 @@ def main():
                         st.hostname, st.client_ip
                     )
                 else:
-                    # Normal baseline and ML training only continues if the device behaves safely
                     with STATE_LOCK:
                         st.rate_baseline.update(feats["query_rate"], current_hour)
                         st.entropy_baseline.update(feats["entropy_avg"], current_hour)
@@ -872,7 +912,6 @@ def main():
                         st.blocked_baseline.update(feats["blocked_ratio"], current_hour)
                         st.dga_baseline.update(feats["suspicious_domains"], current_hour)
                         st.risk_baseline.update(risk_score, current_hour)
-                        # NEW: Update diurnal memory arrays tracking exfiltration volume sizes
                         st.outbound_bytes_baseline.update(feats.get("zeek_outbound_bytes", 0.0), current_hour)
                     
                     ml.learn(dev_id, feats)
@@ -891,98 +930,45 @@ def main():
                 else:
                     risk_velocity = 0.0
 
-                ti_risk_metric.labels(dev_id, st.hostname, st.device_type).set(ti_risk)
-                ti_match_metric.labels(dev_id, st.hostname, st.device_type).set(ti_match)
+                str_dev_id = str(dev_id)
+                str_host = str(st.hostname)
+                str_type = str(st.device_type)
 
-                for domain_entry, d_count in st.rolling.domains.items():
-                    # Unpack the new tuple structure
-                    _, geo_info = _geo_lookup_cached(geoip_engine, domain_entry)
-                    c_code = geo_info.get("country", "unknown")
-                    c_city = geo_info.get("city", "unknown")
-                    c_asn  = geo_info.get("asn", "unknown")
-                    c_org  = geo_info.get("org", "unknown")
-                    c_cont = geo_info.get("continent", "unknown")
-                    c_lat  = geo_info.get("latitude", "0")
-                    c_lon  = geo_info.get("longitude", "0")
+                ti_risk_metric.labels(str_dev_id, str_host, str_type).set(ti_risk)
+                ti_match_metric.labels(str_dev_id, str_host, str_type).set(ti_match)
 
-                    geo_risk = 0.0
-                    geo_beacon = 0
-                    if c_code != "unknown":
-                        geo_country_counts[c_code] += d_count
-                    if c_code in ["RU", "CN", "IR", "KP"]:
-                        geo_risk = 5.0
-                        geo_beacon = d_count
+                ndr_doh_bypass_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_doh_bypass", 0))
+                ndr_lateral_moves_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_lateral_moves", 0))
+                ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
+                ndr_exfil_z_metric.labels(str_dev_id, str_host, str_type).set(feats.get("outbound_bytes_z", 0.0))
 
-                    geo_risk_metric.labels(c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon).set(geo_risk)
-                    if geo_risk > 0:
-                        geo_hits_metric.labels(c_code, c_asn).inc(d_count)
-                    if geo_beacon > 0:
-                        geo_beacon_metric.labels(c_code, c_asn).inc(geo_beacon)
-                    asn_risk_metric.labels(c_asn, c_org).set(5.0 if geo_risk > 0 else 0.0)
-
-                    geo_traffic_total.labels(c_code, c_city, c_cont, c_asn, c_org, c_lat, c_lon).inc(d_count)
-                    
-                    qpm_calc = d_count * (60.0 / float(CONFIG["window_seconds"]))
-                    geo_queries_per_minute.labels(c_code, c_city, c_asn, c_lat, c_lon).set(qpm_calc)
-                    
-                    dim_3 = (c_code, c_city, c_asn)
-                    geo_domain_tracking.setdefault(dim_3, set()).add(domain_entry)
-                    geo_device_tracking.setdefault(dim_3, set()).add(dev_id)
-
-                    try:
-                        from utils import entropy as _ent_fn
-                        ent_score = _ent_fn(domain_entry.split(".")[0])
-                    except Exception:
-                        ent_score = 3.0
-                    geo_entropy.labels(c_code, c_city, c_asn).set(ent_score)
-
-                zeek_conn_count_metric.labels(dev_id, st.hostname, st.device_type).set(
-                    zeek_feats.get("zeek_conn_count", 0)
-                )
-                zeek_new_ips_metric.labels(dev_id, st.hostname, st.device_type).set(
-                    zeek_feats.get("zeek_new_ips", 0)
-                )
-                zeek_ja3_metric.labels(dev_id, st.hostname, st.device_type).set(
-                    zeek_feats.get("zeek_ja3_malicious", 0)
-                )
-                zeek_notices_metric.labels(dev_id, st.hostname, st.device_type).set(
-                    zeek_feats.get("zeek_notices", 0)
-                )
-                zeek_susp_ports_metric.labels(dev_id, st.hostname, st.device_type).set(
-                    zeek_feats.get("zeek_susp_ports", 0)
-                )
-
-                # NEW: Set values to localized NDR pipeline metric hooks
-                ndr_doh_bypass_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("zeek_doh_bypass", 0))
-                ndr_lateral_moves_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("zeek_lateral_moves", 0))
-                ndr_jitter_c2_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("beaconing_c2_count", 0))
-                ndr_exfil_z_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("outbound_bytes_z", 0.0))
-
-                risk_metric.labels(dev_id, st.hostname, st.device_type).set(risk_score)
-                query_rate_metric.labels(dev_id, st.hostname, st.device_type).set(feats["query_rate"])
-                query_rate_baseline_mean_metric.labels(dev_id, st.hostname, st.device_type).set(mean)
-                query_rate_threshold_limit_metric.labels(dev_id, st.hostname, st.device_type).set(current_threshold_limit)
-
-                unique_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats["unique_domains"])
-                entropy_metric.labels(dev_id, st.hostname, st.device_type).set(feats["entropy_avg"])
-                blocked_ratio_metric.labels(dev_id, st.hostname, st.device_type).set(feats["blocked_ratio"])
-                nxdomain_ratio_metric.labels(dev_id, st.hostname, st.device_type).set(feats["nxdomain_ratio"])
-                suspicious_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats["suspicious_domains"])
-                ml_anomaly_metric.labels(dev_id, st.hostname, st.device_type).set(ml_score)
-
-                zscore_query_metric.labels(dev_id, st.hostname, st.device_type).set(feats["query_rate_z"])
-                zscore_entropy_metric.labels(dev_id, st.hostname, st.device_type).set(feats["entropy_avg_z"])
-                zscore_unique_metric.labels(dev_id, st.hostname, st.device_type).set(feats["unique_domains_z"])
-                zscore_nxdomain_metric.labels(dev_id, st.hostname, st.device_type).set(feats["nxdomain_ratio_z"])
-                zscore_blocked_metric.labels(dev_id, st.hostname, st.device_type).set(feats["blocked_ratio_z"])
-                zscore_dga_metric.labels(dev_id, st.hostname, st.device_type).set(feats["suspicious_domains_z"])
-                risk_velocity_metric.labels(dev_id, st.hostname, st.device_type).set(risk_velocity)
-
-                new_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("new_domains", 0.0))
-                deep_domains_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("deep_domains", 0.0))
-                nxdomain_tld_conc_metric.labels(dev_id, st.hostname, st.device_type).set(feats.get("nxdomain_tld_conc", 0.0))
+                zeek_conn_count_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_conn_count", 0))
+                zeek_new_ips_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_new_ips", 0))
+                zeek_ja3_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_ja3_malicious", 0))
+                zeek_notices_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_notices", 0))
+                zeek_susp_ports_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_susp_ports", 0))
                 
-                safe_device_metric.labels(dev_id, st.hostname, st.device_type).set(1.0 if risk_score < 4.0 else 0.0)
+                risk_metric.labels(str_dev_id, str_host, str_type).set(risk_score)
+                query_rate_metric.labels(str_dev_id, str_host, str_type).set(feats["query_rate"])
+                query_rate_baseline_mean_metric.labels(str_dev_id, str_host, str_type).set(mean)
+                query_rate_threshold_limit_metric.labels(str_dev_id, str_host, str_type).set(current_threshold_limit)
+                unique_domains_metric.labels(str_dev_id, str_host, str_type).set(feats["unique_domains"])
+                entropy_metric.labels(str_dev_id, str_host, str_type).set(feats["entropy_avg"])
+                blocked_ratio_metric.labels(str_dev_id, str_host, str_type).set(feats["blocked_ratio"])
+                nxdomain_ratio_metric.labels(str_dev_id, str_host, str_type).set(feats["nxdomain_ratio"])
+                suspicious_domains_metric.labels(str_dev_id, str_host, str_type).set(feats["suspicious_domains"])
+                ml_anomaly_metric.labels(str_dev_id, str_host, str_type).set(ml_score)
+                zscore_query_metric.labels(str_dev_id, str_host, str_type).set(feats["query_rate_z"])
+                zscore_entropy_metric.labels(str_dev_id, str_host, str_type).set(feats["entropy_avg_z"])
+                zscore_unique_metric.labels(str_dev_id, str_host, str_type).set(feats["unique_domains_z"])
+                zscore_nxdomain_metric.labels(str_dev_id, str_host, str_type).set(feats["nxdomain_ratio_z"])
+                zscore_blocked_metric.labels(str_dev_id, str_host, str_type).set(feats["blocked_ratio_z"])
+                zscore_dga_metric.labels(str_dev_id, str_host, str_type).set(feats["suspicious_domains_z"])
+                risk_velocity_metric.labels(str_dev_id, str_host, str_type).set(risk_velocity)
+                new_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("new_domains", 0.0))
+                deep_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("deep_domains", 0.0))
+                nxdomain_tld_conc_metric.labels(str_dev_id, str_host, str_type).set(feats.get("nxdomain_tld_conc", 0.0))
+                safe_device_metric.labels(str_dev_id, str_host, str_type).set(1.0 if risk_score < 4.0 else 0.0)
 
                 alert_threshold = float(CONFIG["alert_threshold"])
                 if risk_score >= alert_threshold:
@@ -1011,17 +997,36 @@ def main():
                         st.last_alert_risk = 0.0
                         st.last_alert_signature = ""
 
-            # MEMORY FIX 2: Global flush of ALL Zeek data tracking maps. 
-            # Ensures non-DNS proxy flows hitting the router never sit perpetually in memory.
+            # Global flush of ALL Zeek data tracking maps. 
             zeek_fx.reset_all()
 
-            for dim_3, unique_domains_set in geo_domain_tracking.items():
-                c_code, c_city, c_asn = dim_3
-                geo_unique_domains.labels(c_code, c_city, c_asn).set(len(unique_domains_set))
+            # =========================================================================
+            # GLOBAL PROMETHEUS EMISSION
+            # Slashes thousands of label loop calls down to 1 call per unique geographical region
+            # =========================================================================
+            geo_country_counts = Counter()
+            
+            for dim, data in unique_geos.items():
+                c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon = dim
                 
-            for dim_3, unique_devices_set in geo_device_tracking.items():
-                c_code, c_city, c_asn = dim_3
-                geo_device_count.labels(c_code, c_city, c_asn).set(len(unique_devices_set))
+                geo_risk = 5.0 if c_code in ["RU", "CN", "IR", "KP"] else 0.0
+                geo_risk_metric.labels(c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon).set(geo_risk)
+                asn_risk_metric.labels(c_asn, c_org).set(5.0 if geo_risk > 0 else 0.0)
+                
+                geo_queries_per_minute.labels(c_code, c_city, c_asn, c_lat, c_lon).set(data["count"] * (60.0 / float(CONFIG["window_seconds"])))
+                
+                dim_3 = (c_code, c_city, c_asn)
+                geo_unique_domains.labels(*dim_3).set(len(data["domains"]))
+                geo_device_count.labels(*dim_3).set(len(data["devices"]))
+                
+                ent_sum = 0.0
+                for d in data["domains"]:
+                    try: ent_sum += _ent_fn(d.split(".")[0])
+                    except Exception: ent_sum += 3.0
+                geo_entropy.labels(*dim_3).set(ent_sum / max(len(data["domains"]), 1))
+                
+                if c_code != "unknown":
+                    geo_country_counts[c_code] += data["count"]
 
             if geo_country_counts:
                 top_country = geo_country_counts.most_common(1)[0][0]
