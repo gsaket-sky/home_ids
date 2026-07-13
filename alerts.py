@@ -59,6 +59,9 @@ class AlertJSONWriter:
     def __init__(self, path: str = "alerts.json",
                  max_bytes: int = _DEFAULT_ALERT_FILE_MAX_BYTES):
         self.path      = Path(path)
+        # NEW: Dedicate a separate streaming file path for Promtail log tracking.
+        # This keeps it completely safe from the legacy .jsonl migration file checks below.
+        self.jsonl_path = self.path.with_name(self.path.with_suffix("").name + "_stream.jsonl")
         self.max_bytes = max(1024 * 1024, int(max_bytes or _DEFAULT_ALERT_FILE_MAX_BYTES))
         self._lock     = threading.Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +75,7 @@ class AlertJSONWriter:
         record.setdefault("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
         with self._lock:
+            # Handle standard atomic pretty-print document storage
             try:
                 alerts = self._load()
                 alerts.append(record)
@@ -80,7 +84,20 @@ class AlertJSONWriter:
             except Exception as exc:
                 LOGGER.warning("Could not write alert JSON file %s: %s", self.path, exc)
 
+            # NEW: Append a single-line version of the same record to the Promtail pipeline feed.
+            # We use sequential append mode ('a') because Promtail expects an unbroken file offset history.
+            try:
+                self._write_jsonl_stream(record)
+            except Exception as exc:
+                LOGGER.warning("Could not write streaming JSONL token to %s: %s", self.jsonl_path, exc)
+
     # ── internals ──────────────────────────────────────────────────────────
+
+    # NEW: Core method to isolate line-by-line streaming serialization
+    def _write_jsonl_stream(self, record: dict) -> None:
+        """Append a single flat line JSON object for active Promtail tracking."""
+        with open(self.jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
 
     def _load(self) -> list:
         """

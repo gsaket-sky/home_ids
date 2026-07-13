@@ -12,6 +12,7 @@ Hardened Improvements:
   - Added Probationary Guard to enforce rigid rules on unverified cold-start devices.
   - Added Diurnal Velocity checking to adapt risk to Day/Night activity cycles.
   - NDR UPGRADES: Processes Jitter coefficient scores, DoH proxy evasion actions, and Private Subnet Lateral scanner pivots.
+  - CONTEXTUAL DAMPENER: Applied 80% penalty reduction to DGA and C2 Jitter rules for mobile devices to accommodate natural background telemetry.
 """
 
 def safe_float(v, default: float = 0.0) -> float:
@@ -60,6 +61,14 @@ class RiskScorer:
             })
 
         device_type = getattr(state, "device_type", None) or "unknown"
+        
+        # Determine base context dampener for natural mobile behavior
+        is_mobile = device_type in ["phone", "tablet"]
+        
+        # Phones naturally beacon and query messy API hashes for push notifications. 
+        # We slash the penalty weight for these specific behaviors by 80% for mobile devices.
+        mobile_dampener = 0.2 if is_mobile else 1.0
+        
         sens = _DEVICE_SENSITIVITY.get(device_type, 1.0)
         if sens <= 0:
             return {
@@ -145,7 +154,8 @@ class RiskScorer:
             if bl > 0.85 and bl_z > 3.0 and nx > 0.2:
                 add("Blocked DNS ratio", (bl - 0.85) * 4 * volume_dampener * context_dampener, round(bl, 3), f"Extreme block evasion behavior (Z={bl_z:.2f}){context_detail}")
             if sd > 0 and sd_z > 3.0:
-                add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
+                # Dampened for mobile heuristics
+                add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener * mobile_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
 
         if nd_ratio > 0.25 and total >= 30:
             add("First-seen domain burst", min(nd_ratio * 4.0, 2.0) * volume_dampener, round(nd_ratio, 3), f"New infrastructure share expansion ({int(nd)} domains)")
@@ -190,7 +200,8 @@ class RiskScorer:
         # ── NEW ADVANCED DETECTION SCORING PENALTIES ─────────────────────────
         c2_jitter_count = safe_float(features.get("beaconing_c2_count", 0), 0.0)
         if c2_jitter_count > 0:
-            add("C2 Jitter Clock Verification", 4.0 * volume_dampener * context_dampener, c2_jitter_count, "Uniform periodicity check-in sequences tracked")
+            # Dampened for mobile natural background beaconing
+            add("C2 Jitter Clock Verification", 4.0 * volume_dampener * context_dampener * mobile_dampener, c2_jitter_count, "Uniform periodicity check-in sequences tracked")
 
         doh_bypass_count = safe_float(features.get("zeek_doh_bypass", 0), 0.0)
         if doh_bypass_count > 0:

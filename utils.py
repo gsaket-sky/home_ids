@@ -74,6 +74,13 @@ _CDN_PARENT_ALLOWLIST = frozenset({
     "aaplimg.com", "mzstatic.com",
     "nflxvideo.net", "nflxso.net", "nflxext.com",
     "scdn.co", "spotifycdn.com", "twimg.com", "ytimg.com",
+
+    # NEW: Mobile Telemetry & Sync Infrastructure (Silences DGA False Positives)
+    "samsungcloud.com", "samsungcloud.net", "samsungrm.net",
+    "gvt1.com", "gvt2.com", "gvt3.com", # Google Video/Play Updates
+    "crashlytics.com", "app-measurement.com", "firebaseio.com",
+    "icloud.com", "apple-dns.net", "push.apple.com",
+    "googleapis.com", "android.clients.google.com",
 })
 
 
@@ -173,19 +180,25 @@ def infer_device_type(hostname):
         "android": "phone",
         "pixel": "phone",
         "samsung": "phone",
+        "galaxy": "phone",         # Fixes Galaxy-Note9
+
+        "ipad": "tablet",          # Fixes iPad.fritz.box
 
         "macbook": "laptop",
         "thinkpad": "laptop",
         "dell": "laptop",
         "hp": "laptop",
         "lenovo": "laptop",
+        "linux": "laptop",         # Fixes linux.fritz.box
 
         "roku": "smart_tv",
         "firetv": "smart_tv",
         "appletv": "smart_tv",
         "bravia": "smart_tv",
         "samsungtv": "smart_tv",
+        "monitor": "smart_tv",
         "lgwebos": "smart_tv",
+        "amazon": "smart_tv",      # Fixes amazon-23bccab01
 
         "printer": "printer",
         "epson": "printer",

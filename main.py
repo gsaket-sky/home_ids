@@ -174,18 +174,23 @@ def calculate_zscore(val: float, baseline, cap=8.0) -> float:
 def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
     """
     Extracts diurnal stats based on the hour.
-    Falls back to peer cluster averages if the device profile is cold. 
-    This protects newly connected devices from anomalous scoring traps by comparing 
-    them to known 'like' device profiles operating in the same time block.
+    Splits the network timeline into 3 distinct operational profiles:
+      0 = Day Window (06:00 - 22:00) -> Active user browsing
+      1 = Night/Evening (22:00 - 01:00 & 05:00 - 06:00) -> Winding down / low idle
+      2 = Maintenance Window (01:00 - 05:00) -> Heavy smartphone cloud backups & telemetry
     """
     mean, var, initialized, n = baseline.get_stats(hour)
     
-    # 0 for Day (06:00-22:00), 1 for Night (22:00-06:00)
-    time_idx = 0 if 6 <= hour < 22 else 1  
+    # CRITICAL FIX: Isolate the deep-night backup window
+    if 6 <= hour < 22:
+        time_idx = 0  # Day
+    elif 1 <= hour < 5:
+        time_idx = 2  # Maintenance (Telemetry dumps)
+    else:
+        time_idx = 1  # Winding down / Early Morning
     
-    # If this specific device baseline is warm for this time block, use it directly
+    # If this specific device baseline is warm for this hour, use it directly
     if initialized and n >= 100:
-        # Update peer cluster matrix with fresh, verified data points
         dev_cluster = PEER_CLUSTER_REGISTRY.setdefault(dev_type, {})
         feat_cluster = dev_cluster.setdefault(feature_name, {})
         feat_cluster[time_idx] = {"mean": mean, "var": var}
@@ -193,14 +198,13 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
         std_dev = math.sqrt(max(var, 1.0))
         return max(-8.0, min(8.0, (val - mean) / std_dev))
     
-    # Cold start fallback: check if peer cluster behavior templates exist specifically for THIS time block
+    # Cold start fallback: check peer cluster templates for THIS specific time profile
     peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name, {}).get(time_idx)
     if peer_template:
         p_mean = peer_template["mean"]
         p_std  = math.sqrt(max(peer_template["var"], 1.0))
         return max(-8.0, min(8.0, (val - p_mean) / p_std))
     
-    # Absolute cold start fallback with no peer baseline history at all
     return 0.0
 
 # =============================================================================
