@@ -283,6 +283,11 @@ ti_ioc_hits_total = Counter(
 )
 
 # ── Safe list ──────────────────────────────────────────────────────────────
+# BUGFIX: main.py previously set this gauge using "risk_score < 4.0" for
+# monitored devices — an unrelated signal that didn't match this metric's
+# own description. main.py now sets 1.0 only for devices actually matched by
+# _is_safe_device() (safe_ips / safe_host_patterns) and 0.0 for every
+# monitored device, matching the description below for real.
 safe_device_metric = Gauge(
     "home_ids_safe_device",
     "Device is on the safe list (1=excluded from scoring, 0=monitored)",
@@ -290,6 +295,14 @@ safe_device_metric = Gauge(
 )
 
 # ── Dynamic Limits ─────────────────────────────────────────────────────────
+# BUGFIX NOTE: this Gauge is defined but was never imported or set anywhere in
+# main.py — it's dead code. It also duplicates query_rate_threshold_limit_metric
+# below, which IS wired up (main.py sets it from the same mean + k*std_dev
+# calculation) and IS used by the dashboard's "Threat Thresholds vs Safe
+# Baseline Corridor" panel. Left defined (rather than deleted) in case external
+# tooling already scrapes home_ids_per_device_threshold, but it will always
+# read as empty/absent until something actually calls .labels(...).set(...)
+# on it. Prefer home_ids_query_rate_threshold_limit for dashboards.
 per_device_threshold_metric = Gauge(
     "home_ids_per_device_threshold",
     "Dynamic per-device threshold limit (mean + k * std_dev)",

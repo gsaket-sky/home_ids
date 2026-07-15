@@ -18,6 +18,18 @@ Codex changelog 2026-06-18:
   - Added alert_json_path and alert_json_max_bytes defaults for capped alert file logging.
   - Added safe_host_patterns defaults for Pi-hole hostname exclusion.
   - safe_ips remains the direct IP allowlist for DNS servers and other infrastructure.
+
+Bugfix changelog (this version):
+  - Added `home_subnet` (CIDR) so zeek_collector.py's lateral-movement / internal
+    traffic detection no longer hardcodes "192.168.178.0/24". Previously this was
+    a bare module constant in zeek_collector.py; on any network that isn't a
+    Fritz!Box default LAN, lateral-movement detection silently never fired and
+    all normal internal traffic was miscounted as "new external IPs".
+  - Added `geoip_asn_db` (optional path to a GeoLite2-ASN.mmdb) so geoip_engine.py
+    can populate real ASN/org values. Previously ASN/org were hardcoded to
+    "unknown" for every lookup, which meant every ASN-keyed metric
+    (asn_risk_metric, geo_hits_metric, etc.) was permanently a single dead
+    "unknown" bucket. Leave empty to keep the previous (ASN-less) behavior.
 """
 
 import json
@@ -44,6 +56,13 @@ DEFAULT_CONFIG = {
     "model_path": "models/ids_model.pkl",
     "max_device_states": 5000,
     "geoip_db": "../geoiop/GeoLite2-City.mmdb",
+    # NEW: Optional GeoLite2-ASN.mmdb path. When empty, ASN/org fields stay
+    # "unknown" (previous behavior) instead of silently pretending to be looked up.
+    "geoip_asn_db": "",
+    # NEW: CIDR of the home LAN, used by zeek_collector.py to distinguish
+    # internal-to-internal traffic (lateral movement candidates) from traffic
+    # leaving the network. Was previously a hardcoded "192.168.178." prefix.
+    "home_subnet": "192.168.178.0/24",
     "telegram_enabled": True,
     "telegram_token": "",
     "telegram_chat_id": "",

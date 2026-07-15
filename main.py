@@ -355,10 +355,22 @@ _DEVICE_GAUGES = (
     ndr_jitter_c2_metric, ndr_exfil_z_metric
 )
 
-def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str) -> None:
+def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str,
+                                  keep_safe_flag: bool = False) -> None:
+    """
+    Removes all per-device Prometheus gauge labels for a device.
+
+    keep_safe_flag: BUGFIX addition — when True (device is being dropped
+    because it's on the safe list, not because it went stale/renamed), skip
+    removing safe_device_metric so the 1.0 value set by the caller survives
+    and dashboards can still see "this device is safe-listed" instead of the
+    label vanishing along with every other metric.
+    """
     if not dev_id or not hostname or not device_type:
         return
     for metric in _DEVICE_GAUGES:
+        if keep_safe_flag and metric is safe_device_metric:
+            continue
         try:
             metric.remove(str(dev_id), str(hostname), str(device_type))
         except KeyError:
@@ -617,7 +629,11 @@ def main():
         model_dir         = Path(CONFIG["model_path"]).parent / "devices",
         global_model_path = Path(CONFIG["model_path"]),
     )
-    geoip_engine = GeoIPEngine(CONFIG["geoip_db"])
+    # BUGFIX: geoip_engine.py previously hardcoded asn/org to "unknown" with
+    # no way to change that. Now pass the optional ASN database path through;
+    # if it's empty/unset, behavior is identical to before (asn/org stay
+    # "unknown").
+    geoip_engine = GeoIPEngine(CONFIG["geoip_db"], asn_db_path=CONFIG.get("geoip_asn_db", ""))
     
     tg_token = CONFIG.get("telegram_token", "")
     tg_chat  = CONFIG.get("telegram_chat_id", "")
@@ -629,7 +645,11 @@ def main():
         enabled = _tg_enabled,
     )
     alert_log = AlertJSONWriter(
-        path=CONFIG.get("alert_json_path", "alerts.jsonl"),
+        # BUGFIX: fallback here was "alerts.jsonl" but config.py's actual
+        # DEFAULT_CONFIG (and config.json) both use "alerts.json" — the two
+        # defaults had drifted apart. Harmless while config.json always sets
+        # the key, but wrong if it's ever removed. Aligned to "alerts.json".
+        path=CONFIG.get("alert_json_path", "alerts.json"),
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
     
@@ -669,7 +689,10 @@ def main():
         log_dir       = CONFIG.get("zeek_log_dir", "/opt/zeek/logs/current"),
         poll_interval = float(CONFIG["poll_interval"]),
     )
-    zeek_fx = ZeekFeatureExtractor()
+    # BUGFIX: home_subnet was previously a hardcoded "192.168.178." constant
+    # inside zeek_collector.py. Now sourced from config.json so lateral-movement
+    # detection works on networks other than a Fritz!Box default LAN.
+    zeek_fx = ZeekFeatureExtractor(home_subnet=CONFIG.get("home_subnet", "192.168.178.0/24"))
     start_http_server(int(CONFIG.get("metrics_port", 9105)))
 
     def _on_config_change(changed: dict) -> None:
@@ -821,7 +844,25 @@ def main():
 
             for dev_id, st in active_devices:
                 if _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns):
-                    _remove_device_metric_labels(dev_id, st.hostname, st.device_type)
+                    # BUGFIX: previously safe-listed devices were dropped here
+                    # via _remove_device_metric_labels() (which also wiped
+                    # safe_device_metric), and safe_device_metric was instead
+                    # set later using "risk_score < 4.0" for ordinary
+                    # devices — meaning the metric's documented meaning
+                    # ("Device is on the safe list") never actually matched
+                    # what it recorded: real safe-listed devices never got
+                    # value 1, and non-safe devices got a risk threshold flag
+                    # mislabeled as "safe list" membership.
+                    # Fix: explicitly record 1.0 for genuinely safe-listed
+                    # devices before their other per-device metrics are torn
+                    # down, then always keep this one gauge alive so
+                    # dashboards can see it.
+                    safe_device_metric.labels(
+                        str(dev_id), str(st.hostname), str(st.device_type)
+                    ).set(1.0)
+                    _remove_device_metric_labels(
+                        dev_id, st.hostname, st.device_type, keep_safe_flag=True
+                    )
                     with STATE_LOCK:
                         states.pop(dev_id, None)
                     continue
@@ -845,6 +886,21 @@ def main():
                     top_domain = None
                 feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
 
+                # BUGFIX (critical): zeek_feats — which contains
+                # zeek_outbound_bytes — must be merged into `feats` BEFORE the
+                # z-score block below runs. This used to happen AFTER the
+                # z-score block, so `feats.get("zeek_outbound_bytes", 0.0)`
+                # always silently fell back to 0.0 and outbound_bytes_z was
+                # permanently computed as "0 bytes vs baseline" — meaning the
+                # "Exfiltration Payload Burst" scoring factor and the
+                # home_ids_outbound_bytes_zscore metric could never fire,
+                # no matter how much data actually left the device. The
+                # baseline itself (st.outbound_bytes_baseline.update(...) further
+                # below) was unaffected since it already ran after this merge.
+                zeek_feats  = zeek_fx.get_features(st.client_ip)
+                zeek_alerts = zeek_fx.get_alerts(st.client_ip)
+                feats.update(zeek_feats)
+
                 # Bind time-aware clustered Z-scores using adaptive peer groupings
                 feats["query_rate_z"]         = calculate_adaptive_zscore(feats["query_rate"], st.rate_baseline, "rate", st.device_type, current_hour)
                 feats["entropy_avg_z"]        = calculate_adaptive_zscore(feats["entropy_avg"], st.entropy_baseline, "entropy", st.device_type, current_hour)
@@ -854,6 +910,8 @@ def main():
                 feats["nxdomain_ratio_z"]     = calculate_adaptive_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline, "nxdomain", st.device_type, current_hour)
                 feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
                 feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
+                # This now correctly reads the real zeek_outbound_bytes value
+                # merged in above, instead of always defaulting to 0.0.
                 feats["outbound_bytes_z"]     = calculate_adaptive_zscore(feats.get("zeek_outbound_bytes", 0.0), st.outbound_bytes_baseline, "outbound_bytes", st.device_type, current_hour)
 
                 # --- ML ENGINE COMPATIBILITY MAPPING FIX ---
@@ -873,10 +931,6 @@ def main():
                 else:
                     mean = 0.0
                     current_threshold_limit = 0.0
-
-                zeek_feats  = zeek_fx.get_features(st.client_ip)
-                zeek_alerts = zeek_fx.get_alerts(st.client_ip)
-                feats.update(zeek_feats)
 
                 ti_risk, abuse_risk, vt_risk, ti_match, ti_matches = _evaluate_intel(
                     st, feats, ti, abuseipdb, vt, zeek_fx.get_dest_ips(st.client_ip), zeek_fx.get_http_reqs(st.client_ip), global_ti_cache
@@ -946,6 +1000,26 @@ def main():
                 ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
                 ndr_exfil_z_metric.labels(str_dev_id, str_host, str_type).set(feats.get("outbound_bytes_z", 0.0))
 
+                # BUGFIX: geo_beacon_metric (home_ids_geo_beaconing_total) was
+                # imported at the top of this file but never had .labels()/.inc()
+                # called on it anywhere in the engine. It backs two dashboard
+                # panels ("C2 Beaconing Maps" and "Beaconing Timeline") and is
+                # the only metric in the whole dashboard that carries an `asn`
+                # label into a legend ({{country}} / {{asn}}) — both panels were
+                # therefore guaranteed to render empty regardless of real
+                # beaconing activity. Attribute detected C2 jitter hits to the
+                # geo of this device's current dominant domain (top_domain,
+                # already computed above for the familiarity dampener) — a
+                # reasonable proxy since beaconing concentrates traffic onto a
+                # single destination by definition.
+                c2_hits = feats.get("beaconing_c2_count", 0)
+                if c2_hits and top_domain:
+                    _, beacon_geo = _geo_lookup_cached(geoip_engine, top_domain)
+                    geo_beacon_metric.labels(
+                        str(beacon_geo.get("country", "unknown")),
+                        str(beacon_geo.get("asn", "unknown")),
+                    ).inc(c2_hits)
+
                 zeek_conn_count_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_conn_count", 0))
                 zeek_new_ips_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_new_ips", 0))
                 zeek_ja3_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_ja3_malicious", 0))
@@ -972,7 +1046,16 @@ def main():
                 new_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("new_domains", 0.0))
                 deep_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("deep_domains", 0.0))
                 nxdomain_tld_conc_metric.labels(str_dev_id, str_host, str_type).set(feats.get("nxdomain_tld_conc", 0.0))
-                safe_device_metric.labels(str_dev_id, str_host, str_type).set(1.0 if risk_score < 4.0 else 0.0)
+                # BUGFIX: this used to be `1.0 if risk_score < 4.0 else 0.0`,
+                # which repurposed a metric documented as "Device is on the
+                # safe list (1=excluded from scoring, 0=monitored)" into an
+                # unrelated "is this cycle's risk low" flag. Every device
+                # reaching this line already failed the _is_safe_device()
+                # check above (actual safe-listed devices are dropped with
+                # `continue` before this point and get their 1.0 set there
+                # instead — see the loop entry above), so this is always a
+                # monitored, non-safe device: record 0.0 accordingly.
+                safe_device_metric.labels(str_dev_id, str_host, str_type).set(0.0)
 
                 alert_threshold = float(CONFIG["alert_threshold"])
                 if risk_score >= alert_threshold:

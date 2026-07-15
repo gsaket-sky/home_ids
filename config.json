@@ -12,6 +12,8 @@
   "model_path": "models/ids_model.pkl",
   "max_device_states": 5000,
   "geoip_db": "../geoiop/GeoLite2-City.mmdb",
+  "geoip_asn_db": "../geoiop/GeoLite2-ASN.mmdb",
+  "home_subnet": "192.168.178.0/24",
   "telegram_enabled": true,
   "telegram_token": "",
   "telegram_chat_id": "",
@@ -32,7 +34,18 @@
     "pi_hole",
     "pi.hole"
   ],
-  "device_type_overrides": {},
+  "device_type_overrides": { 
+    "LPTP2044883": "laptop",
+    "lghometheater": "smart_tv",
+    "DIR355BT": "iot",
+    "Aki-PC": "laptop",
+    "dreame": "iot",
+    "Chromecast": "iot",
+    "Watch": "phone",
+    "Samsung": "smart_tv",
+    "sky-lp": "server",
+    "Kindle": "tablet"
+},
   "alert_json_path": "alerts.json",
   "alert_json_max_bytes": 1073741824,
   "_changelog_2026_06_18": [
@@ -40,12 +53,18 @@
     "Added safe_host_patterns for Pi-hole hostname exclusion.",
     "Added alert_json_path and alert_json_max_bytes for capped JSON alert logs."
   ],
+  "_bugfix_changelog": [
+    "Added home_subnet (CIDR) — previously hardcoded as '192.168.178.' inside zeek_collector.py. Set to 192.168.178.0/24 here to preserve existing behavior for this network; change if your LAN uses a different subnet.",
+    "Added geoip_asn_db (empty by default) — point this at a GeoLite2-ASN.mmdb to populate real ASN/org values. Previously these fields were hardcoded to 'unknown' with no way to fix it via config."
+  ],
   "_config_notes": {
     "window_seconds": "300s (5 min) — was 600. Faster DGA detection, matches startup_lookback",
     "ml_warmup_samples": "5000 — was 10000. Per-device model now activates in ~2.8h not 5.5h",
     "baseline_alpha": "0.05 kept — correct EWMA speed for rate/entropy/unique",
     "decay_factor": "0.995 kept — correct domain count half-life of ~4.6 min",
     "poll_interval": "2s kept — optimal, Pi-hole DB is event-driven not time-driven",
-    "alert_threshold": "6.0 kept — well-calibrated after FP sensitivity fixes"
+    "alert_threshold": "6.0 kept — well-calibrated after FP sensitivity fixes",
+    "home_subnet": "192.168.178.0/24 — matches the 192.168.178.94 safe_ips entry above. Update if your router's LAN differs.",
+    "geoip_asn_db": "Empty = ASN/org metrics stay 'unknown' (same as before). Set a GeoLite2-ASN.mmdb path to enable them."
   }
 }

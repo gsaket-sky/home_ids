@@ -14,6 +14,22 @@ Performance fixes (this version):
   CRITICAL FIX: Bulletproof O(1) Startup & B-Tree Indexing
       Uses `SELECT MAX(id)` to find the exact end of the database instantly, 
       bypassing the missing timestamp index and avoiding full-table I/O scans.
+
+Bugfix changelog (this version):
+  BUG: excluded_patterns was accepted in __init__ and stored on self, but
+      poll() never referenced it anywhere — only excluded_ips was applied
+      (at the SQL level). safe_host_patterns (e.g. "pihole") was therefore
+      never actually filtered by the collector; it silently relied on
+      main.py's later per-cycle _is_safe_device()/_drop_safe_states() checks
+      to catch it after a DeviceState, features, and an ML sample had
+      already been created for it once.
+      Fix: poll() now cross-references each row's resolved hostname (from
+      self._hostnames, populated from network_addresses) against
+      excluded_patterns and drops matches before they ever leave the
+      collector. This can't be pushed into the SQL WHERE clause (hostnames
+      live in a separate table keyed by IP, and pattern matching isn't a
+      simple equality), so it's applied in Python immediately after the
+      hostname is resolved — before the row is handed back to main.py.
 """
 
 import logging
@@ -147,13 +163,30 @@ class PiHoleCollector:
 
         results = []
         for row in rows:
+            client_ip = row[3]
+            hostname  = self._hostnames.get(client_ip, client_ip)  # O(1) Local Memory Map
+
+            # BUGFIX: excluded_patterns was previously stored but never used.
+            # Apply hostname-pattern exclusion here so safe-listed devices
+            # (e.g. "pihole") never reach main.py at all, matching the
+            # excluded_ips SQL-level exclusion above.
+            if self._matches_excluded_pattern(hostname):
+                continue
+
             results.append({
                 "timestamp": row[1],
                 "domain":    row[2],
-                "client_ip": row[3],
-                "hostname":  self._hostnames.get(row[3], row[3]), # O(1) Local Memory Map
+                "client_ip": client_ip,
+                "hostname":  hostname,
                 "status":    row[4]
             })
-            
+
         self.last_id = rows[-1][0]
         return results
+
+    def _matches_excluded_pattern(self, hostname: str) -> bool:
+        """Return True if hostname contains any configured safe_host_pattern."""
+        if not self.excluded_patterns or not hostname:
+            return False
+        host = str(hostname).lower()
+        return any(pattern in host for pattern in self.excluded_patterns)
