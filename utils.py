@@ -1,23 +1,24 @@
+"""
+utils.py – Utility helper functions.
+"""
 import math
 import hashlib
 import tldextract
 import socket
 import ipaddress
+import logging
+
+LOGGER = logging.getLogger("home_ids.utils")
 
 def normalize_domain(domain):
     return str(domain).lower().strip(".")
 
-
-
 def safe_label(label):
     return hashlib.sha1(str(label).encode()).hexdigest()[:8]
-
-
 
 def sanitize_hostname(host):
     if not host:
         return "unknown"
-
     return (
         host.lower()
         .replace(".", "_")
@@ -25,38 +26,25 @@ def sanitize_hostname(host):
         [:40]
     )
 
-
-
 def etld1(domain):
     ext = tldextract.extract(domain)
     return f"{ext.domain}.{ext.suffix}"
 
-
-
 def entropy(text):
     if not text:
         return 0.0
-
     freq = {}
-
     for c in text:
         freq[c] = freq.get(c, 0) + 1
-
     ent = 0
-
     for v in freq.values():
         p = v / len(text)
         ent -= p * math.log2(p)
-
     return ent
-
-
 
 def vowel_ratio(text):
     vowels = sum(1 for c in text if c in "aeiou")
     return vowels / max(len(text), 1)
-
-
 
 # FP-5: CDN parent domain allowlist.
 # Amazon CloudFront and similar CDNs use hash-based subdomain labels
@@ -75,7 +63,7 @@ _CDN_PARENT_ALLOWLIST = frozenset({
     "nflxvideo.net", "nflxso.net", "nflxext.com",
     "scdn.co", "spotifycdn.com", "twimg.com", "ytimg.com",
 
-    # NEW: Mobile Telemetry & Sync Infrastructure (Silences DGA False Positives)
+    # Mobile Telemetry & Sync Infrastructure (Silences DGA False Positives)
     "samsungcloud.com", "samsungcloud.net", "samsungrm.net",
     "gvt1.com", "gvt2.com", "gvt3.com", # Google Video/Play Updates
     "crashlytics.com", "app-measurement.com", "firebaseio.com",
@@ -83,6 +71,21 @@ _CDN_PARENT_ALLOWLIST = frozenset({
     "googleapis.com", "android.clients.google.com",
 })
 
+# NEW: Telemetry Suppressor Allowlist checks child parts of standard analytics chains
+_TELEMETRY_DOMAINS = frozenset({
+    "appsflyersdk.com", "crashlytics.com", "google-analytics.com",
+    "firebaseio.com", "aria.microsoft.com", "bugsmirror.com",
+    "app-measurement.com", "moengage.com", "zomato.com"
+})
+
+def is_telemetry_domain(domain: str) -> bool:
+    """True if domain matches known high-volume telemetry SDKs."""
+    parts = domain.lower().strip(".").split(".")
+    if len(parts) >= 2 and ".".join(parts[-2:]) in _TELEMETRY_DOMAINS:
+        return True
+    if len(parts) >= 3 and ".".join(parts[-3:]) in _TELEMETRY_DOMAINS:
+        return True
+    return False
 
 def _is_cdn_domain(domain: str) -> bool:
     """True if the domain's parent or grandparent is a known CDN."""
@@ -92,7 +95,6 @@ def _is_cdn_domain(domain: str) -> bool:
     if len(parts) >= 3 and ".".join(parts[-3:]) in _CDN_PARENT_ALLOWLIST:
         return True
     return False
-
 
 def suspicious_dga(domain):
     """
@@ -135,25 +137,15 @@ def suspicious_dga(domain):
     # Path 1 (standard DGA): high entropy, low vowels, not a digit-heavy token
     return ent > 3.8 and vr < 0.25 and dr < 0.40
 
-import socket
-import ipaddress
-
-
 def resolve_domain(domain):
-
     try:
-
         infos = socket.getaddrinfo(
             domain,
             None
         )
-
         for info in infos:
-
             ip = info[4][0]
-
             parsed = ipaddress.ip_address(ip)
-
             if (
                 not parsed.is_private
                 and not parsed.is_loopback
@@ -161,21 +153,17 @@ def resolve_domain(domain):
                 and not parsed.is_link_local
             ):
                 return ip
-
     except Exception:
         return None
-
     return None
 
 def infer_device_type(hostname):
-
     if not hostname:
         return "unknown"
 
     h = hostname.lower()
 
     patterns = {
-
         "iphone": "phone",
         "android": "phone",
         "pixel": "phone",
@@ -224,7 +212,6 @@ def infer_device_type(hostname):
     }
 
     for key, dtype in patterns.items():
-
         if key in h:
             return dtype
 

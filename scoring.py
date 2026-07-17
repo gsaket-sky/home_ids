@@ -13,14 +13,23 @@ Hardened Improvements:
   - Added Diurnal Velocity checking to adapt risk to Day/Night activity cycles.
   - NDR UPGRADES: Processes Jitter coefficient scores, DoH proxy evasion actions, and Private Subnet Lateral scanner pivots.
   - CONTEXTUAL DAMPENER: Applied 80% penalty reduction to DGA and C2 Jitter rules for mobile devices to accommodate natural background telemetry.
+  
+Bugfix changelog (this version):
+  - BUGFIX: Removed context_dampener from the C2 Jitter calculation. This closes a 
+    detection loophole where highly deterministic, mechanical malware check-ins were 
+    being falsely dampened simply because they were communicating with a historically 
+    "familiar" domain (e.g., a compromised CDN or legitimate update server).
 """
+from utils import is_telemetry_domain
+import logging
+
+LOGGER = logging.getLogger("home_ids.scoring")
 
 def safe_float(v, default: float = 0.0) -> float:
     try:
         return float(v) if v is not None else default
     except Exception:
         return default
-
 
 # Multiplier < 1.0 means more sensitive. IoT devices such as Echo/Alexa are
 # intentionally no longer amplified: repetitive DNS is normal for that class.
@@ -39,25 +48,20 @@ _DEVICE_SENSITIVITY = {
     "gateway":        0.0,
 }
 
-
 class RiskScorer:
-    def compute(self, features: dict, state, ml_score: float,
-                zeek_alerts: list = None) -> float:
+    def compute(self, features: dict, state, ml_score: float, zeek_alerts: list = None) -> float:
         return self.explain(features, state, ml_score, zeek_alerts)["risk"]
 
-    def explain(self, features: dict, state, ml_score: float,
-                zeek_alerts: list = None) -> dict:
+    def explain(self, features: dict, state, ml_score: float, zeek_alerts: list = None) -> dict:
         factors = []
+        LOGGER.debug("Evaluating Risk Engine profile for %s (ML Score: %.4f)", state.hostname, ml_score)
 
         def add(name: str, score: float, value=None, detail: str = "") -> None:
             score = safe_float(score, 0.0)
             if score <= 0:
                 return
             factors.append({
-                "name": name,
-                "score": round(score, 3),
-                "value": value,
-                "detail": detail,
+                "name": name, "score": round(score, 3), "value": value, "detail": detail,
             })
 
         device_type = getattr(state, "device_type", None) or "unknown"
@@ -71,6 +75,7 @@ class RiskScorer:
         
         sens = _DEVICE_SENSITIVITY.get(device_type, 1.0)
         if sens <= 0:
+            LOGGER.debug("Device %s is infrastructure, suppressing risk scores.", state.hostname)
             return {
                 "risk": 0.0,
                 "factors": [{
@@ -106,14 +111,21 @@ class RiskScorer:
         volume_dampener = 1.0 if total >= 100.0 else max(0.1, total / 100.0)
 
         # Stateful Contextual Enrichment
+        if st_domains := getattr(state.rolling, "domains", {}):
+            top_domain = max(st_domains, key=st_domains.get, default=None)
+        else:
+            top_domain = None
+
         top_domain_is_familiar = bool(features.get("top_domain_is_familiar", False))
-        
         if top_domain_is_familiar and tdr > 0.50:
             context_dampener = 0.35
             context_detail = " (Dampened: spike maps to familiar historical domain)"
         else:
             context_dampener = 1.0
             context_detail = ""
+
+        # BUGFIX: Zero out suspicious features when a domain matches known telemetry endpoints
+        is_telemetry = bool(top_domain and is_telemetry_domain(top_domain))
 
         # Probationary Cold-Device Detection (Day-Zero Protection)
         rate_baseline_n = sum(getattr(state.rate_baseline, "n", [0, 0]))
@@ -122,9 +134,9 @@ class RiskScorer:
         if is_on_probation:
             if total > 150 and unique_domains > 40:
                 add("Probationary volume ceiling breach", 3.5 * context_dampener, total, f"Unverified new device generating high density out-of-the-box query volumes{context_detail}")
-            if nx > 0.40:
+            if nx > 0.40 and not is_telemetry:
                 add("Probationary NXDOMAIN absolute breach", 3.0 * context_dampener, round(nx, 3), f"Unverified new device generating high absolute failure rates{context_detail}")
-            if nd > 15:
+            if nd > 15 and not is_telemetry:
                 add("Probationary unmapped infrastructure flood", 2.5 * context_dampener, nd, f"Device contacting substantial unique external targets on first run{context_detail}")
         
         nd_ratio = nd / max(unique_domains, 1.0)
@@ -136,11 +148,11 @@ class RiskScorer:
         if qz > 3.0: z_parts.append(f"query_rate_z={qz:.2f}")
         if ez > 3.0: z_parts.append(f"entropy_z={ez:.2f}")
         if uz > 3.0: z_parts.append(f"unique_domains_z={uz:.2f}")
-        if nx > 0.3 and nx_z > 3.0: z_parts.append(f"nxdomain_ratio={nx:.2f}(Z={nx_z:.1f})")
+        if nx > 0.3 and nx_z > 3.0 and not is_telemetry: z_parts.append(f"nxdomain_ratio={nx:.2f}(Z={nx_z:.1f})")
         if bl > 0.7 and bl_z > 3.0 and nx > 0.15: z_parts.append(f"blocked_ratio={bl:.2f}(Z={bl_z:.1f})")
 
         abs_count = sum([
-            nx > 0.3 and nx_z > 3.0,
+            nx > 0.3 and nx_z > 3.0 and not is_telemetry,
             bl > 0.7 and bl_z > 3.0 and nx > 0.15,
         ])
         dns_anomaly_count = z_score_count + abs_count
@@ -149,21 +161,25 @@ class RiskScorer:
             add("Correlated DNS baseline deviation", 3.0 * volume_dampener * context_dampener, None, ", ".join(z_parts) + context_detail)
             
         if not is_on_probation:
-            if nx > 0.5 and nx_z > 3.0:
+            if nx > 0.5 and nx_z > 3.0 and not is_telemetry:
                 add("NXDOMAIN ratio", (nx - 0.5) * 4 * volume_dampener * context_dampener, round(nx, 3), f"Failed lookups deviating from profile{context_detail}")
             if bl > 0.85 and bl_z > 3.0 and nx > 0.2:
                 add("Blocked DNS ratio", (bl - 0.85) * 4 * volume_dampener * context_dampener, round(bl, 3), f"Extreme block evasion behavior (Z={bl_z:.2f}){context_detail}")
             if sd > 0 and sd_z > 3.0:
-                # Dampened for mobile heuristics
-                add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener * mobile_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
+                if is_telemetry:
+                    LOGGER.debug("Suppressed DGA penalty for known SDK domain: %s", top_domain)
+                    add("Telemetry SDK activity (Suppressed)", 0.0, sd, "Known background analytics SDK")
+                else:
+                    # Dampened for mobile heuristics
+                    add("Suspicious/DGA-like domains", min(sd, 10) * 0.4 * volume_dampener * context_dampener * mobile_dampener, sd, f"Heuristic matches verified by anomaly spike (Z={sd_z:.2f}){context_detail}")
 
-        if nd_ratio > 0.25 and total >= 30:
+        if nd_ratio > 0.25 and total >= 30 and not is_telemetry:
             add("First-seen domain burst", min(nd_ratio * 4.0, 2.0) * volume_dampener, round(nd_ratio, 3), f"New infrastructure share expansion ({int(nd)} domains)")
 
-        if dd_ratio > 0.10 and total >= 30:
+        if dd_ratio > 0.10 and total >= 30 and not is_telemetry:
             add("Deep DNS labels", min(dd_ratio * 4.0, 2.0) * volume_dampener, round(dd_ratio, 3), f"Deep subdomains share expansion ({int(dd)} domains)")
 
-        if tc > 0.7 and nx > 0.2 and nx_z > 3.0:
+        if tc > 0.7 and nx > 0.2 and nx_z > 3.0 and not is_telemetry:
             add("NXDOMAIN TLD concentration", (tc - 0.7) * 5 * volume_dampener * context_dampener, round(tc, 3), f"Failures concentrated in anomalous TLD structure{context_detail}")
 
         beacon_score = 0.0
@@ -171,6 +187,9 @@ class RiskScorer:
         elif tdr > 0.80 and eps > 3: beacon_score = 1.5
         elif tdr > 0.70 and eps > 5: beacon_score = 1.0
         
+        if is_telemetry:
+            beacon_score *= 0.1
+            
         add("High-volume single-domain beaconing", beacon_score * volume_dampener * context_dampener, round(tdr, 3), f"events_per_second={eps:.2f}{context_detail}")
 
         if ml_score > 0.02:
@@ -192,7 +211,9 @@ class RiskScorer:
 
         # Zeek Network Core Signals
         zeek_ja3 = safe_float(features.get("zeek_ja3_malicious", 0), 0.0)
-        add("Malicious JA3 TLS fingerprint", min(zeek_ja3 * 4.0, 4.0), zeek_ja3, "Known malware TLS fingerprint")
+        if zeek_ja3 > 0:
+            LOGGER.critical("JA3 Malicious signature factored into risk score for %s", state.hostname)
+            add("Malicious JA3 TLS fingerprint", min(zeek_ja3 * 4.0, 4.0), zeek_ja3, "Known malware TLS fingerprint")
 
         zeek_ports = safe_float(features.get("zeek_susp_ports", 0), 0.0)
         add("Suspicious destination port", min(zeek_ports * 1.5, 3.0), zeek_ports, "Outbound connection to suspicious port")
@@ -200,19 +221,23 @@ class RiskScorer:
         # ── NEW ADVANCED DETECTION SCORING PENALTIES ─────────────────────────
         c2_jitter_count = safe_float(features.get("beaconing_c2_count", 0), 0.0)
         if c2_jitter_count > 0:
-            # Dampened for mobile natural background beaconing
-            add("C2 Jitter Clock Verification", 4.0 * volume_dampener * context_dampener * mobile_dampener, c2_jitter_count, "Uniform periodicity check-in sequences tracked")
+            # BUGFIX: Removed context_dampener from strict mechanical jitter. 
+            # Deterministic timing to a compromised familiar domain is a critical threat loophole.
+            add("C2 Jitter Clock Verification", 4.0 * volume_dampener * mobile_dampener, c2_jitter_count, "Uniform periodicity check-in sequences tracked")
 
         doh_bypass_count = safe_float(features.get("zeek_doh_bypass", 0), 0.0)
         if doh_bypass_count > 0:
+            LOGGER.warning("DoH bypass factored for %s", state.hostname)
             add("DoH Tunneling Bypass Evasion", 5.0, doh_bypass_count, "Encrypted DNS lookup queries bypassing local network gateway filters")
 
         lateral_moves_count = safe_float(features.get("zeek_lateral_moves", 0), 0.0)
         if lateral_moves_count > 0:
+            LOGGER.warning("Internal Lateral Movement factored for %s", state.hostname)
             add("Internal Lateral Movement", 6.0, lateral_moves_count, "Subnet security scanning violations targeting core infrastructure ports")
 
         outbound_bytes_z = safe_float(features.get("outbound_bytes_z", 0.0), 0.0)
         if outbound_bytes_z > 5.0:
+            LOGGER.warning("Exfiltration spike factored for %s (Z=%.2f)", state.hostname, outbound_bytes_z)
             add("Exfiltration Payload Burst", 3.5 * volume_dampener, round(outbound_bytes_z, 2), f"Outbound transfer byte metrics severely breaking distribution bounds")
 
         _BENIGN_ZEEK_WEIRD = frozenset({

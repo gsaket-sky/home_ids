@@ -1,12 +1,26 @@
 {
-  "__inputs": [{"name": "DS_PROMETHEUS","label": "Prometheus","type": "datasource","pluginId": "prometheus"}],
-  "__requires": [{"type": "grafana","id": "grafana","name": "Grafana","version": "10.0.0"}],
-  "annotations": {"list": []},
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [],
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "links": [],
   "liveNow": true,
+  "title": "Home IDS - Master Threat Console",
+  "uid": "home-ids-master-v2",
+  "version": 1,
   "panels": [
     {
       "id": 1000,
@@ -21,17 +35,19 @@
       "gridPos": {"x": 0, "y": 1, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
-        "content": "**How to read this section:** Monitors the physical health of your Python engine, SQLite database, and Zeek collectors.\n* 🟢 **Normal:** Collector lag < 2 seconds. The Script Memory Footprint is a flat, horizontal line. Alert Queue stays at 0.\n* 🔴 **Abnormal / Threat:** A diagonal memory line indicates a leak. Lag > 15s means the Pi-hole database is locked. Anti-Poisoning Freezes > 0 means the script detected a Day-Zero threat and intentionally locked its own learning memory to prevent baseline poisoning."
+        "content": "**How to read this section:** Monitors the physical health of your Python engine, SQLite database, and Zeek collectors.\n* 🟢 **Normal:** Collector lag < 2 seconds. Zeek Status is 1. The Script Memory Footprint is a flat, horizontal line. Alert Queue stays at 0.\n* 🔴 **Abnormal / Threat:** A diagonal memory line indicates a leak. Lag > 15s means the Pi-hole database is locked. Anti-Poisoning Freezes > 0 means the script detected a Day-Zero threat and intentionally locked its own learning memory to prevent baseline poisoning."
       },
       "transparent": true
     },
-    {"id":1,"type":"stat","title":"ML Model Status","gridPos":{"x":0,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_ml_model_loaded","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":2,"type":"stat","title":"Collector Lag","gridPos":{"x":3,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":1,"type":"stat","title":"ML Model Status","gridPos":{"x":0,"y":4,"w":2,"h":4},"targets":[{"expr":"home_ids_ml_model_loaded","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":11,"type":"stat","title":"Zeek Status","gridPos":{"x":2,"y":4,"w":2,"h":4},"targets":[{"expr":"home_ids_zeek_status","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":2,"type":"stat","title":"Collector Lag","gridPos":{"x":4,"y":4,"w":2,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"options":{"colorMode":"background"}},
     {"id":3,"type":"stat","title":"Alert Queue Size","gridPos":{"x":6,"y":4,"w":3,"h":4},"targets":[{"expr":"home_ids_alert_queue_size","refId":"A"}],"options":{"colorMode":"background"}},
     {"id":4,"type":"stat","title":"Alerts Fired (last 1h)","gridPos":{"x":9,"y":4,"w":3,"h":4},"targets":[{"expr":"increase(home_ids_alerts_total[1h])","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":5,"type":"stat","title":"Events / min","gridPos":{"x":12,"y":4,"w":3,"h":4},"targets":[{"expr":"rate(home_ids_events_processed_total[10m]) * 60","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":502,"type":"stat","title":"Anti-Poisoning Freezes","gridPos":{"x":15,"y":4,"w":4,"h":4},"targets":[{"expr":"count(home_ids_risk_score >= 7.0) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":8,"type":"timeseries","title":"Collector Lag Trend","gridPos":{"x":19,"y":4,"w":5,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10,"lineWidth":1}}}},
+    {"id":5,"type":"stat","title":"DNS / min","gridPos":{"x":12,"y":4,"w":2,"h":4},"targets":[{"expr":"rate(home_ids_events_processed_total[10m]) * 60","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":13,"type":"stat","title":"Zeek / min","gridPos":{"x":14,"y":4,"w":2,"h":4},"targets":[{"expr":"rate(home_ids_zeek_events_processed_total[10m]) * 60","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":502,"type":"stat","title":"Anti-Poisoning Freezes","gridPos":{"x":16,"y":4,"w":3,"h":4},"targets":[{"expr":"count(home_ids_risk_score >= 7.0) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
+    {"id":8,"type":"timeseries","title":"Collector Lag Trend","gridPos":{"x":19,"y":4,"w":5,"h":4},"targets":[{"expr":"home_ids_collector_lag_seconds","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10, "lineWidth":1}}}},
     {"id":501,"type":"timeseries","title":"Script Memory Footprint (Slots)","gridPos":{"x":0,"y":8,"w":8,"h":5},"targets":[{"expr":"process_resident_memory_bytes{job=\"home_ids\"} / 1024 / 1024","legendFormat":"RSS (MB)","refId":"A"}],"fieldConfig":{"defaults":{"unit":"megabytes","custom":{"fillOpacity":10,"lineWidth":2}}}},
     {"id":503,"type":"timeseries","title":"Alert Pipeline Backlog","gridPos":{"x":8,"y":8,"w":8,"h":5},"targets":[{"expr":"home_ids_alert_queue_size","legendFormat":"Queue","refId":"A"},{"expr":"rate(home_ids_alerts_total[5m])*60","legendFormat":"Alerts/min","refId":"B"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":5,"lineWidth":2}}}},
     {"id":504,"type":"timeseries","title":"SQLite WAL Velocity vs Lag","gridPos":{"x":16,"y":8,"w":8,"h":5},"targets":[{"expr":"home_ids_collector_lag_seconds","legendFormat":"Lag (s)","refId":"A"},{"expr":"rate(home_ids_events_processed_total[5m])","legendFormat":"Ingest/s","refId":"B"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2}}}},
@@ -49,181 +65,918 @@
       "gridPos": {"x": 0, "y": 14, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
-        "content": "**How to read this section:** Your 30,000-foot daily driver. It provides a macro view of every device and immediately highlights rule-breakers.\n* 🟢 **Normal:** The 'Severe Threats' counter is 0. On the corridor chart, the solid live traffic lines stay comfortably beneath the dotted 'Threat Limit' ceiling.\n* 🔴 **Abnormal / Threat:** Solid traffic lines breaking violently through the top of the dotted Threat Limit line. Any device glowing red (Score > 7.0) in the Threat Ledger requires immediate investigation below."
+        "content": "**How to read this section:** Your 30,000-foot daily driver. It provides a macro view of every device and immediately highlights rule-breakers.\n* 🟢 **Normal:** The 'Severe Threats' counter is 0. On the corridor chart, the solid live traffic lines stay comfortably beneath the dotted 'Threat Limit' ceiling.\n* 🔴 **Abnormal / Threat:** Solid traffic lines breaking violently through the top of the dotted Threat Limit line. Any device glowing red (Score > 6.0) in the Threat Ledger requires immediate investigation below."
       },
       "transparent": true
     },
     {"id":6,"type":"stat","title":"Active Devices","gridPos":{"x":0,"y":17,"w":3,"h":4},"targets":[{"expr":"count(home_ids_risk_score) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":7,"type":"stat","title":"Severe Threats (Risk ≥ 8)","gridPos":{"x":3,"y":17,"w":3,"h":4},"targets":[{"expr":"count(home_ids_risk_score >= 8) or vector(0)","refId":"A"}],"options":{"colorMode":"background"}},
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Severe Threats (Risk ≥ 6.0)",
+      "gridPos": {"x": 3, "y": 17, "w": 3, "h": 4},
+      "targets": [{"expr": "count(home_ids_risk_score >= 6.0) or vector(0)", "refId": "A"}],
+      "options": {"colorMode": "background"},
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}]
+          }
+        }
+      }
+    },
     {"id":12,"type":"stat","title":"Live Baseline Breaches","gridPos":{"x":6,"y":17,"w":4,"h":4},"targets":[{"expr":"count(home_ids_query_rate > home_ids_query_rate_threshold_limit) or vector(0)","refId":"A"}],"options":{"colorMode":"background"},"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
     {"id":90,"type":"stat","title":"Engine Max Risk","gridPos":{"x":10,"y":17,"w":4,"h":4},"targets":[{"expr":"max(home_ids_risk_score{hostname=~\"$device\"})","refId":"A"}]},
     {"id":92,"type":"timeseries","title":"Pipeline EPS","gridPos":{"x":14,"y":17,"w":5,"h":4},"targets":[{"expr":"rate(home_ids_events_processed_total[10m]) * 60","refId":"A"}]},
     {"id":93,"type":"timeseries","title":"Pipeline Alerts","gridPos":{"x":19,"y":17,"w":5,"h":4},"targets":[{"expr":"rate(home_ids_alerts_total[10m]) * 300","refId":"A"}]},
-    {"id":10,"type":"timeseries","title":"Risk Score Timeline — All Devices","gridPos":{"x":0,"y":21,"w":12,"h":8},"targets":[{"expr":"home_ids_risk_score{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10,"lineWidth":1},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":8,"color":"red"}]}}}},
+    {"id":10,"type":"timeseries","title":"Risk Score Timeline — All Devices","gridPos":{"x":0,"y":21,"w":12,"h":8},"targets":[{"expr":"home_ids_risk_score{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"fillOpacity":10,"lineWidth":1},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"yellow"},{"value":6,"color":"red"}]}}}},
     {"id":20,"type":"timeseries","title":"Threat Thresholds vs Safe Baseline Corridor (Query Rate)","gridPos":{"x":12,"y":21,"w":12,"h":8},"targets":[{"expr":"home_ids_query_rate{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Live","refId":"A"},{"expr":"home_ids_query_rate_baseline_mean{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Mean","refId":"B"},{"expr":"home_ids_query_rate_threshold_limit{hostname=~\"$device\"}","legendFormat":"{{hostname}} - Limit","refId":"C"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2,"fillOpacity":0}},"overrides":[{"matcher":{"id":"byRegexp","options":".*Mean.*"},"properties":[{"id":"custom.lineStyle","value":{"fill":"dash","dash":[10,10]}},{"id":"custom.lineWidth","value":1}]},{"matcher":{"id":"byRegexp","options":".*Limit.*"},"properties":[{"id":"custom.lineStyle","value":{"fill":"dash","dash":[5,5]}},{"id":"custom.fillBelowTo","value":".*Mean.*"},{"id":"custom.fillOpacity","value":15},{"id":"color","value":{"mode":"fixed","fixedColor":"red"}}]}]}},
-    {"id":80,"type":"table","title":"All Devices — Baseline & Threat Ledger","gridPos":{"x":0,"y":29,"w":24,"h":10},"targets":[{"expr":"home_ids_risk_score{hostname=~\"$device\"}","format":"table","instant":true,"refId":"A"},{"expr":"home_ids_query_rate{hostname=~\"$device\"}","format":"table","instant":true,"refId":"B"},{"expr":"home_ids_ml_anomaly_score{hostname=~\"$device\"}","format":"table","instant":true,"refId":"C"},{"expr":"home_ids_ti_risk{hostname=~\"$device\"}","format":"table","instant":true,"refId":"D"},{"expr":"home_ids_zeek_ja3_malicious{hostname=~\"$device\"}","format":"table","instant":true,"refId":"E"}],"transformations":[{"id":"joinByField","options":{"byField":"hostname","mode":"outer"}},{"id":"organize","options":{"excludeByName":{"Time":true,"__name__":true,"device":true},"renameByName":{"Value #A":"Live Risk","Value #B":"Queries/min","Value #C":"ML Score","Value #D":"TI Threat","Value #E":"JA3 Hash","device_type":"Type","hostname":"Hostname"}}},{"id":"sortBy","options":{"fields":[{"desc":true,"displayName":"Live Risk"}]}}],"fieldConfig":{"defaults":{"custom":{"align":"center"}},"overrides":[{"matcher":{"id":"byName","options":"Hostname"},"properties":[{"id":"custom.align","value":"left"}]},{"matcher":{"id":"byName","options":"Live Risk"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"yellow"},{"value":6,"color":"red"}]}}]},{"matcher":{"id":"byName","options":"TI Threat"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":0.5,"color":"red"}]}}]},{"matcher":{"id":"byName","options":"JA3 Hash"},"properties":[{"id":"thresholds","value":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":0.5,"color":"red"}]}}]}]}},
+    {
+      "id": 80,
+      "type": "table",
+      "title": "All Devices — Baseline & Threat Ledger",
+      "gridPos": {"x": 0, "y": 29, "w": 24, "h": 10},
+      "targets": [
+        {"expr": "home_ids_risk_score{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "A"},
+        {"expr": "home_ids_query_rate{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "B"},
+        {"expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "C"},
+        {"expr": "home_ids_ti_risk{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "D"},
+        {"expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "E"},
+        {"expr": "home_ids_unique_domains{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "F"},
+        {"expr": "home_ids_blocked_ratio{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "G"},
+        {"expr": "home_ids_ti_match{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "H"},
+        {"expr": "home_ids_zeek_conn_count{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "I"},
+        {"expr": "home_ids_zeek_new_ips{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "J"},
+        {"expr": "home_ids_zeek_notices{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "K"},
+        {"expr": "home_ids_safe_device{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "L"},
+        {"expr": "home_ids_probation_status{hostname=~\"$device\"}", "format": "table", "instant": true, "refId": "M"}
+      ],
+      "transformations": [
+        {"id": "joinByField", "options": {"byField": "hostname", "mode": "outer"}},
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "Time 6": true, "Time 7": true, "Time 8": true, "Time 9": true, "Time 10": true, "Time 11": true, "Time 12": true, "__name__": true, "device": true},
+            "renameByName": {
+              "Value #A": "Live Risk", "Value #B": "Queries/min", "Value #C": "ML Score", "Value #D": "TI Threat", "Value #E": "JA3 Hash",
+              "Value #F": "Unique Domains", "Value #G": "Blocked Ratio", "Value #H": "TI Match Flag", "Value #I": "Zeek Conns",
+              "Value #J": "Zeek New IPs", "Value #K": "Zeek Notices", "Value #L": "Safe-Listed", "Value #M": "Probation", "device_type": "Type", "hostname": "Hostname"
+            }
+          }
+        },
+        {"id": "sortBy", "options": {"fields": [{"desc": true, "displayName": "Live Risk"}]}}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"align": "center"},
+          "links": [
+            {
+              "title": "🔍 Deep-Dive Logs for ${__data.fields.Hostname}",
+              "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22${__data.fields.Hostname}%22%22%7D%5D",
+              "targetBlank": true
+            }
+          ]
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Hostname"}, "properties": [{"id": "custom.align", "value": "left"}]},
+          {"matcher": {"id": "byName", "options": "Live Risk"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "yellow"}, {"value": 6, "color": "red"}]}}]},
+          {"matcher": {"id": "byName", "options": "TI Threat"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.5, "color": "red"}]}}]},
+          {"matcher": {"id": "byName", "options": "JA3 Hash"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.5, "color": "red"}]}}]},
+          {"matcher": {"id": "byName", "options": "Safe-Listed"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"value": 0, "color": "grey"}, {"value": 1, "color": "blue"}]}}]},
+          {"matcher": {"id": "byName", "options": "Probation"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "orange"}]}}]}
+        ]
+      }
+    },
+
+    {
+      "id": 2500,
+      "type": "row",
+      "title": "🔍 Interactive Incident Response & Loki Triage Room",
+      "gridPos": {"x": 0, "y": 39, "w": 24, "h": 1}
+    },
+    {
+      "id": 25001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 40, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to leverage this terminal:** This is your active forensic workstation fed directly via Promtail from your `alerts_stream.jsonl` pipeline.\n* When Prometheus components spike above, click their contextual data link to automatically target queries into this log container.\n* Use the metadata schema inside the viewer to analyze localized execution paths, factor scores, and exact cryptographic IOC details instantly."
+      },
+      "transparent": true
+    },
+    {
+      "id": 2502,
+      "type": "logs",
+      "title": "Live Master Alert Payload Stream (Loki Integration)",
+      "gridPos": {"x": 0, "y": 43, "w": 24, "h": 10},
+      "targets": [
+        {
+          "expr": "{filename=~\".*_stream.jsonl\"} | json | device_id=~\"$device\" or hostname=~\"$device\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyJSON": true,
+        "enableLogDetails": true
+      }
+    },
 
     {
       "id": 3000,
       "type": "row",
       "title": "🚨 Threat: Threat Intelligence & Deterministic Malware",
-      "gridPos": {"x": 0, "y": 39, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 53, "w": 24, "h": 1}
     },
     {
       "id": 30001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 40, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 54, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Skips behavioral guesswork and looks for absolute, verified malware signatures using integrated feeds (AbuseIPDB, URLhaus, VirusTotal) and Zeek TLS fingerprints.\n* 🟢 **Normal:** These panels should be completely flat at zero.\n* 🔴 **Abnormal / Threat:** JA3 Hits > 0 means a device is initiating an encrypted connection using the exact TLS handshake of known malware (Cobalt Strike, Trickbot). TI Risk Spikes mean a device successfully connected to an explicitly listed global hacker blocklist."
       },
       "transparent": true
     },
-    {"id":401,"type":"timeseries","title":"TI Feed Match Risk","gridPos":{"x":0,"y":43,"w":8,"h":8},"targets":[{"expr":"home_ids_ti_risk{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":403,"type":"timeseries","title":"TI Hits by Feed","gridPos":{"x":8,"y":43,"w":8,"h":8},"targets":[{"expr":"rate(home_ids_ti_ioc_hits_total[10m])*300","legendFormat":"{{source}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
-    {"id":411,"type":"timeseries","title":"JA3 Malicious TLS Hits","gridPos":{"x":16,"y":43,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_ja3_malicious{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+    {
+      "id": 401,
+      "type": "timeseries",
+      "title": "TI Feed Match Risk",
+      "gridPos": {"x": 0, "y": 57, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_ti_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.5, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Drill Down into TI Logs",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C%7Bfeatures_ti_risk%3D~%22.%22%7D%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 40010,
+      "type": "timeseries",
+      "title": "AbuseIPDB Risk Magnitude",
+      "gridPos": {"x": 8, "y": 57, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_abuseipdb_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Drill Down into AbuseIPDB Logs",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)abuseipdb%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 40011,
+      "type": "timeseries",
+      "title": "VirusTotal Sandbox Risk Magnitude",
+      "gridPos": {"x": 16, "y": 57, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_virustotal_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Drill Down into VirusTotal Logs",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)virustotal%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 403,
+      "type": "timeseries",
+      "title": "TI Hits by Feed",
+      "gridPos": {"x": 0, "y": 65, "w": 8, "h": 8},
+      "targets": [{"expr": "rate(home_ids_ti_ioc_hits_total[10m])*300", "legendFormat": "{{source}} / {{ioc_type}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "bars"}}}
+    },
+    {
+      "id": 411,
+      "type": "timeseries",
+      "title": "JA3 Malicious TLS Hits",
+      "gridPos": {"x": 8, "y": 65, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "bars"},
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Trace Active Cryptographic Handshakes",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)ja3%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 39001,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Threat Intel Forensics",
+      "gridPos": {"x": 0, "y": 73, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)threat intelligence ioc|abuseipdb blacklist|virustotal detection|malicious ja3\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
 
     {
       "id": 4000,
       "type": "row",
       "title": "🚨 Threat: Ransomware & DGA (Domain Generation Algorithms)",
-      "gridPos": {"x": 0, "y": 51, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 81, "w": 24, "h": 1}
     },
     {
       "id": 40001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 52, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 82, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Domain Generation Algorithms (DGAs) are used by ransomware and botnets to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a live command server.\n* 🟢 **Normal:** NXDOMAIN (failed lookup) ratios hover below 10%. New domains occasionally bump up when visiting new websites.\n* 🔴 **Abnormal / Threat:** A massive, simultaneous vertical spike in 'New Domains' and the 'NXDOMAIN Ratio'. If NXDOMAIN TLD Concentration hits > 80%, the malware is hyper-focusing its failed guesses on a specific Top Level Domain (like `.ru` or `.cc`)."
       },
       "transparent": true
     },
-    {"id":311,"type":"timeseries","title":"New Domains (DGA Burst)","gridPos":{"x":0,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_new_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":31,"type":"timeseries","title":"Suspicious / DGA Domains","gridPos":{"x":8,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
-    {"id":30,"type":"timeseries","title":"NXDOMAIN Ratio (DGA Indicator)","gridPos":{"x":16,"y":55,"w":8,"h":8},"targets":[{"expr":"home_ids_nxdomain_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":32,"type":"timeseries","title":"DNS Entropy Avg","gridPos":{"x":0,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_entropy_avg{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":321,"type":"timeseries","title":"NXDOMAIN TLD Concentration","gridPos":{"x":8,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":333,"type":"timeseries","title":"DGA Z-Score","gridPos":{"x":16,"y":63,"w":8,"h":8},"targets":[{"expr":"home_ids_zscore_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
+    {
+      "id": 311,
+      "type": "timeseries",
+      "title": "New Domains (DGA Burst)",
+      "gridPos": {"x": 0, "y": 85, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_new_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Suspicious / DGA Domains",
+      "gridPos": {"x": 8, "y": 85, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "bars"},
+          "links": [{
+            "title": "🔍 Audit Candidate Algorithmic Strings",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)suspicious%2Fdga%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "NXDOMAIN Ratio (DGA Indicator)",
+      "gridPos": {"x": 16, "y": 85, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.3, "color": "yellow"}, {"value": 0.5, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Investigate Missing Routing Lookups",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)nxdomain%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "DNS Entropy Avg",
+      "gridPos": {"x": 0, "y": 93, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_entropy_avg{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}]
+    },
+    {
+      "id": 321,
+      "type": "timeseries",
+      "title": "NXDOMAIN TLD Concentration",
+      "gridPos": {"x": 8, "y": 93, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.5, "color": "yellow"}, {"value": 0.7, "color": "red"}]}
+        }
+      }
+    },
+    {
+      "id": 333,
+      "type": "timeseries",
+      "title": "DGA Z-Score",
+      "gridPos": {"x": 16, "y": 93, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "yellow"}, {"value": 6, "color": "red"}]}
+        }
+      }
+    },
+    {
+      "id": 40090,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Ransomware & DGA Triage",
+      "gridPos": {"x": 0, "y": 101, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)nxdomain ratio|blocked dns ratio|suspicious.*dga|first-seen domain burst|nxdomain tld concentration|probationary nxdomain|correlated dns baseline\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
 
     {
       "id": 5000,
       "type": "row",
       "title": "🚨 Threat: C2 Beaconing & Jitter",
-      "gridPos": {"x": 0, "y": 71, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 109, "w": 24, "h": 1}
     },
     {
       "id": 50001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 72, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 110, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Malware 'beacons' or 'calls home' to a hacker's server periodically. Advanced malware does this slowly (e.g., exactly once every 5 minutes) to evade volume-based detection.\n* 🟢 **Normal:** Human web browsing is erratic and random. The Jitter chart should be completely empty.\n* 🔴 **Abnormal / Threat:** A bar appearing here means Zeek/Pi-hole tracked requests to a single destination with mechanical, robotic timing precision (a Coefficient of Variation under 10%). This is a confirmed, active Command & Control channel."
       },
       "transparent": true
     },
-    {"id":803,"type":"timeseries","title":"Machine C2 Beaconing (Jitter CV < 0.1)","gridPos":{"x":0,"y":75,"w":12,"h":8},"targets":[{"expr":"home_ids_beaconing_c2_count{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20}}}},
-    {"id":222,"type":"timeseries","title":"Beaconing Timeline","gridPos":{"x":12,"y":75,"w":12,"h":8},"targets":[{"expr":"rate(home_ids_geo_beaconing_total[10m]) * 300","legendFormat":"{{country}} / {{asn}}","refId":"A"}]},
+    {
+      "id": 803,
+      "type": "timeseries",
+      "title": "Machine C2 Beaconing (Jitter CV < 0.1)",
+      "gridPos": {"x": 0, "y": 113, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_beaconing_c2_count{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "bars", "fillOpacity": 20},
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Isolate Beaconing Cron Timing Keys",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)jitter|beaconing%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 222,
+      "type": "timeseries",
+      "title": "Beaconing Timeline",
+      "gridPos": {"x": 12, "y": 113, "w": 12, "h": 8},
+      "targets": [{"expr": "rate(home_ids_geo_beaconing_total[10m]) * 300", "legendFormat": "{{country}} / {{asn}}", "refId": "A"}]
+    },
+    {
+      "id": 50010,
+      "type": "timeseries",
+      "title": "Single Domain Concentration Intensity (Top Domain Ratio)",
+      "gridPos": {"x": 0, "y": 121, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_beaconing_volume_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Single-Target Density", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.7, "color": "yellow"}, {"value": 0.9, "color": "red"}]}
+        }
+      }
+    },
+    {
+      "id": 50011,
+      "type": "timeseries",
+      "title": "Minimum Timing Coefficient of Variation (Jitter CV Base)",
+      "gridPos": {"x": 12, "y": 121, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_jitter_cv_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} CV Token", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "red"}, {"value": 0.1, "color": "green"}]}
+        }
+      }
+    },
+    {
+      "id": 50090,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: C2 Periodic Beaconing Analysis",
+      "gridPos": {"x": 0, "y": 129, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)jitter clock verification|single-domain beaconing\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
 
     {
       "id": 6000,
       "type": "row",
       "title": "🚨 Threat: DNS Tunneling & Data Exfiltration",
-      "gridPos": {"x": 0, "y": 83, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 137, "w": 24, "h": 1}
     },
     {
       "id": 60001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 84, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 138, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Attackers steal data either by sneaking it out through long DNS subdomains (e.g., `stolen-password-string.hacker.com`) or by blasting a massive TCP/UDP upload.\n* 🟢 **Normal:** Deep Domains stay near zero (standard websites rarely use >4 sub-labels). The Outbound Bytes Z-Score casually fluctuates between -2 and +2.\n* 🔴 **Abnormal / Threat:** Continuous high counts of Deep Domains mean data is being actively exfiltrated via DNS tunneling. An Exfiltration Z-Score > 5.0 means a massive payload was uploaded, completely shattering historical baselines."
       },
       "transparent": true
     },
-    {"id":312,"type":"timeseries","title":"Deep Domains (Tunnelling)","gridPos":{"x":0,"y":87,"w":12,"h":8},"targets":[{"expr":"home_ids_deep_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":804,"type":"timeseries","title":"TCP/UDP Data Exfiltration Z-Score (Outbound Zeek Bytes)","gridPos":{"x":12,"y":87,"w":12,"h":8},"targets":[{"expr":"home_ids_outbound_bytes_zscore{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"lineWidth":2,"drawStyle":"line"},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"orange"},{"value":5,"color":"red"}]}}}},
+    {
+      "id": 312,
+      "type": "timeseries",
+      "title": "Deep Domains (Tunnelling Labels > 5)",
+      "gridPos": {"x": 0, "y": 141, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_deep_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "links": [{
+            "title": "🔍 Inspect Base64 Payload Encapsulations",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)deep dns%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 804,
+      "type": "timeseries",
+      "title": "TCP/UDP Data Exfiltration Z-Score (Outbound Zeek Bytes)",
+      "gridPos": {"x": 12, "y": 141, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_outbound_bytes_zscore{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"lineWidth": 2, "drawStyle": "line"},
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "orange"}, {"value": 5, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Investigate Outbound Bulk Network Balances",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)exfiltration%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 60090,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Exfiltration & Tunneling Assessment",
+      "gridPos": {"x": 0, "y": 149, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)exfiltration payload burst|deep dns labels\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
 
     {
       "id": 7000,
       "type": "row",
       "title": "🚨 Threat: Defense Evasion & Lateral Movement",
-      "gridPos": {"x": 0, "y": 95, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 157, "w": 24, "h": 1}
     },
     {
       "id": 70001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 96, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 158, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Catches devices trying to bypass your Pi-hole entirely, or compromised internal devices turning around and attacking other devices on your home network.\n* 🟢 **Normal:** All panels are completely flat at zero.\n* 🔴 **Abnormal / Threat:** DoH Bypass > 0 means a device (often a smart TV or malware) is hardcoded to use Cloudflare/Google DNS directly via HTTPS, blinding your Pi-hole. Lateral Movement > 0 is critical: an internal device is actively port-scanning or attempting SSH/SMB connections against another private device (worm spreading)."
       },
       "transparent": true
     },
-    {"id":801,"type":"timeseries","title":"DoH Bypass Attempts (Cloudflare, Google, Quad9)","gridPos":{"x":0,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_doh_bypass{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
-    {"id":802,"type":"timeseries","title":"Internal Lateral Movement (SSH, RDP, SMB scanning)","gridPos":{"x":8,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_lateral_moves{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":1,"color":"red"}]}}}},
-    {"id":412,"type":"timeseries","title":"Suspicious Ext Ports","gridPos":{"x":16,"y":99,"w":8,"h":8},"targets":[{"expr":"home_ids_zeek_suspicious_ports{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}],"fieldConfig":{"defaults":{"custom":{"drawStyle":"bars"}}}},
+    {
+      "id": 801,
+      "type": "timeseries",
+      "title": "DoH Bypass Attempts (Cloudflare, Google, Quad9)",
+      "gridPos": {"x": 0, "y": 161, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_zeek_doh_bypass{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "bars", "fillOpacity": 20},
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Trace Rogue Encrypted Upstream Resolvers",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)doh%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 802,
+      "type": "timeseries",
+      "title": "Internal Lateral Movement (SSH, RDP, SMB scanning)",
+      "gridPos": {"x": 8, "y": 161, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_zeek_lateral_moves{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "bars", "fillOpacity": 20},
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 1, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Isolate Local Pivot Scanner Targets",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)lateral%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 412,
+      "type": "timeseries",
+      "title": "Suspicious Ext Ports",
+      "gridPos": {"x": 16, "y": 161, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_zeek_suspicious_ports{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "bars"}}}
+    },
+    {
+      "id": 70090,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Defense Evasion & Lateral Movements",
+      "gridPos": {"x": 0, "y": 169, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)doh tunneling bypass|internal lateral movement|suspicious destination port\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
 
     {
       "id": 8000,
       "type": "row",
       "title": "🤖 Threat: ML Behavioral Anomalies & Z-Scores",
-      "gridPos": {"x": 0, "y": 107, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 177, "w": 24, "h": 1}
     },
     {
       "id": 80001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 108, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 178, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** The IsolationForest AI engine finds stealthy, 'living-off-the-land' attacks that keep their volume low enough to bypass human-made thresholds.\n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Abnormal / Threat:** ML Score > 0.05 means the AI detected a structural matrix shift (the pattern of traffic is fundamentally alien to that device's history). High Risk Velocity indicates the risk score shot up violently compared to its own rolling hourly average."
       },
       "transparent": true
     },
-    {"id":40,"type":"timeseries","title":"ML Anomaly Score (IsolationForest)","gridPos":{"x":0,"y":111,"w":12,"h":8},"targets":[{"expr":"home_ids_ml_anomaly_score{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":41,"type":"stat","title":"Max ML Score","gridPos":{"x":12,"y":111,"w":4,"h":8},"targets":[{"expr":"max(home_ids_ml_anomaly_score{hostname=~\"$device\"})","refId":"A"}],"options":{"colorMode":"background"}},
-    {"id":301,"type":"timeseries","title":"Risk Velocity Z-Score","gridPos":{"x":16,"y":111,"w":8,"h":8},"targets":[{"expr":"home_ids_risk_velocity{hostname=~\"$device\"}","legendFormat":"{{hostname}}","refId":"A"}]},
-    {"id":21,"type":"timeseries","title":"Baseline Deviations (Z-Scores) — Behavioral Threats","gridPos":{"x":0,"y":119,"w":24,"h":8},"targets":[{"expr":"home_ids_zscore_query_rate{hostname=~\"$device\"}","legendFormat":"{{hostname}} Query-Z","refId":"A"},{"expr":"home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}} NX-Z","refId":"B"},{"expr":"home_ids_zscore_blocked_ratio{hostname=~\"$device\"}","legendFormat":"{{hostname}} Block-Z","refId":"C"},{"expr":"home_ids_zscore_suspicious_domains{hostname=~\"$device\"}","legendFormat":"{{hostname}} DGA-Z","refId":"D"}],"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"value":0,"color":"green"},{"value":3,"color":"yellow"},{"value":6,"color":"red"}]}}}},
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "ML Anomaly Score (IsolationForest)",
+      "gridPos": {"x": 0, "y": 181, "w": 12, "h": 8},
+      "targets": [{"expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 0.02, "color": "yellow"}, {"value": 0.05, "color": "red"}]},
+          "links": [{
+            "title": "🔍 Deconstruct AI Isolation Matrices",
+            "url": "/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Loki%22,%7B%22expr%22:%22%7Bfilename%3D~%22.*_stream.jsonl%22%7D%20%7C%20json%20%7C%20hostname%3D~%22$device%22%20%7C~%22(?i)ml anomaly|outlier%22%22%7D%5D",
+            "targetBlank": true
+          }]
+        }
+      }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Max ML Score",
+      "gridPos": {"x": 12, "y": 181, "w": 4, "h": 8},
+      "targets": [{"expr": "max(home_ids_ml_anomaly_score{hostname=~\"$device\"})", "refId": "A"}],
+      "options": {"colorMode": "background"}
+    },
+    {
+      "id": 301,
+      "type": "timeseries",
+      "title": "Risk Velocity Z-Score",
+      "gridPos": {"x": 16, "y": 181, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_risk_velocity{hostname=~\"$device\"}", "legendFormat": "{{hostname}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 4, "color": "red"}]}
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Baseline Deviations (Z-Scores) — Behavioral Threats",
+      "gridPos": {"x": 0, "y": 189, "w": 24, "h": 8},
+      "targets": [
+        {"expr": "home_ids_zscore_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Query-Z", "refId": "A"},
+        {"expr": "home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}} NX-Z", "refId": "B"},
+        {"expr": "home_ids_zscore_blocked_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Block-Z", "refId": "C"},
+        {"expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} DGA-Z", "refId": "D"},
+        {"expr": "home_ids_zscore_entropy{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Entropy-Z", "refId": "E"},
+        {"expr": "home_ids_zscore_unique_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Unique-Z", "refId": "F"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"value": 0, "color": "green"}, {"value": 3, "color": "yellow"}, {"value": 6, "color": "red"}]}
+        }
+      }
+    },
+    {
+      "id": 80002,
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: ML Mathematical Outliers",
+      "gridPos": {"x": 0, "y": 197, "w": 24, "h": 8},
+      "targets": [{
+        "expr": "{filename=~\".*_stream.jsonl\"} | json | hostname=~\"$device\" |~ \"(?i)ml anomaly|risk velocity\"",
+        "refId": "A"
+      }],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyJSON": true}
+    },
+
+    {
+      "id": 8500,
+      "type": "row",
+      "title": "📡 ASN / Autonomous System Intelligence",
+      "gridPos": {"x": 0, "y": 205, "w": 24, "h": 1}
+    },
+    {
+      "id": 85001,
+      "type": "text",
+      "title": "",
+      "gridPos": {"x": 0, "y": 206, "w": 24, "h": 3},
+      "options": {
+        "mode": "markdown",
+        "content": "**How to trace routing parameters:** Correlates external network endpoints back to their upstream routing providers (ASNs).\n* Ensure `geoip_asn_db` is initialized inside `config.json` to avoid single unknown bucket limits.\n* Target malicious ASNs returning blocklist flags directly inside threat maps below."
+      },
+      "transparent": true
+    },
+    {
+      "id": 8501,
+      "type": "table",
+      "title": "Risk Magnitude Allocation by ASN Matrix",
+      "gridPos": {"x": 0, "y": 209, "w": 8, "h": 8},
+      "targets": [{"expr": "home_ids_asn_risk_score", "format": "table", "instant": true, "refId": "A"}]
+    },
+    {
+      "id": 8502,
+      "type": "timeseries",
+      "title": "Top External Target Routing Providers (ASN Volume)",
+      "gridPos": {"x": 8, "y": 209, "w": 8, "h": 8},
+      "targets": [{"expr": "sum by (asn, org) (rate(home_ids_geo_traffic_total[5m]))", "legendFormat": "{{asn}} ({{org}})", "refId": "A"}]
+    },
+    {
+      "id": 8503,
+      "type": "timeseries",
+      "title": "Threat Feed Hit Counters mapped by ASN Infrastructure",
+      "gridPos": {"x": 16, "y": 209, "w": 8, "h": 8},
+      "targets": [{"expr": "sum by (asn) (rate(home_ids_geo_hits_total[5m]))", "legendFormat": "{{asn}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "bars"}}}
+    },
+    {
+      "id": 8504,
+      "type": "timeseries",
+      "title": "Distinct Internal Device Footprints via ASN targets",
+      "gridPos": {"x": 0, "y": 217, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (asn) (home_ids_geo_device_count)", "legendFormat": "{{asn}}", "refId": "A"}]
+    },
+    {
+      "id": 8505,
+      "type": "timeseries",
+      "title": "Unique Target Domain Cardinality tracked per ASN",
+      "gridPos": {"x": 12, "y": 217, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (asn) (home_ids_geo_unique_domains)", "legendFormat": "{{asn}}", "refId": "A"}]
+    },
 
     {
       "id": 9000,
       "type": "row",
       "title": "🌍 Geographic Intelligence & Threat Maps",
-      "gridPos": {"x": 0, "y": 127, "w": 24, "h": 1}
+      "gridPos": {"x": 0, "y": 225, "w": 24, "h": 1}
     },
     {
       "id": 90001,
       "type": "text",
       "title": "",
-      "gridPos": {"x": 0, "y": 128, "w": 24, "h": 3},
+      "gridPos": {"x": 0, "y": 226, "w": 24, "h": 3},
       "options": {
         "mode": "markdown",
         "content": "**How to read this section:** Visual mapping of where your network packets are physically landing. (Bubble Size = Traffic Volume; Bubble Color = Threat Level).\n* 🟢 **Normal:** Large green bubbles over your home country, the US, and standard infrastructure hubs (AWS, Azure, Google).\n* 🔴 **Abnormal / Threat:** Red bubbles over high-risk jurisdictions. The 'C2 Beaconing Maps' panel lighting up on a specific foreign ASN, showing exactly where a compromised device is sending its check-ins."
       },
       "transparent": true
     },
-    {"id":201,"type":"geomap","title":"Geo Threat Map (Size = Volume, Color = Threat Level)","gridPos":{"x":0,"y":131,"w":16,"h":12},"targets":[{"expr":"home_ids_geo_risk","format":"table","instant":true,"refId":"A"},{"expr":"home_ids_geo_traffic_total","format":"table","instant":true,"refId":"B"}],"transformations":[{"id":"joinByField","options":{"byField":"latitude","mode":"outer"}},{"id":"organize","options":{"excludeByName":{"Time":true,"Time 1":true,"__name__":true,"__name__ 1":true}}}],"options":{"layers":[{"type":"markers","location":{"mode":"coords","latitude":"latitude","longitude":"longitude"},"color":{"field":"Value #A","mode":"thresholds"},"size":{"field":"Value #B","max":40,"min":5},"opacity":0.65}]}},
-    {"id":202,"type":"geomap","title":"Threat Density (Country)","gridPos":{"x":16,"y":131,"w":8,"h":12},"targets":[{"expr":"home_ids_country_threat_density","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8}}]}},
-    {"id":211,"type":"geomap","title":"DNS Query Rate by Location","gridPos":{"x":0,"y":143,"w":16,"h":12},"targets":[{"expr":"home_ids_geo_queries_per_minute","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"coords","latitude":"latitude","longitude":"longitude"},"color":{"field":"Value","mode":"thresholds"},"size":{"field":"Value","max":35,"min":4}}]}},
-    {"id":212,"type":"geomap","title":"Total Traffic by Country","gridPos":{"x":16,"y":143,"w":8,"h":12},"targets":[{"expr":"sum by(country) (count_over_time(home_ids_geo_traffic_total[1h]))","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"field":"Value","max":25,"min":4}}]}},
-    {"id":221,"type":"geomap","title":"C2 Beaconing Maps","gridPos":{"x":0,"y":155,"w":16,"h":12},"targets":[{"expr":"sum by (country) (increase(home_ids_geo_beaconing_total[1h]))","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8},"opacity":0.5}]}},
-    {"id":231,"type":"geomap","title":"Entropy by Country","gridPos":{"x":16,"y":155,"w":8,"h":12},"targets":[{"expr":"avg by (country) (home_ids_geo_entropy)","format":"table","instant":true,"refId":"A"}],"options":{"layers":[{"type":"markers","location":{"mode":"lookup","lookup":"country"},"color":{"field":"Value","mode":"thresholds"},"size":{"fixed":8}}]}}
+    {
+      "id": 201,
+      "type": "geomap",
+      "title": "Geo Threat Map (Size = Volume, Color = Threat Level)",
+      "gridPos": {"x": 0, "y": 229, "w": 16, "h": 12},
+      "targets": [
+        {"expr": "home_ids_geo_risk", "format": "table", "instant": true, "refId": "A"},
+        {"expr": "home_ids_geo_traffic_total", "format": "table", "instant": true, "refId": "B"}
+      ],
+      "transformations": [
+        {"id": "joinByField", "options": {"byField": "latitude", "mode": "outer"}},
+        {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "__name__": true, "__name__ 1": true}}}
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Value #A"},
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 2.5, "color": "yellow"},
+                    {"value": 5, "color": "red"}
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "coords", "latitude": "latitude", "longitude": "longitude"},
+            "color": {"field": "Value #A"},
+            "size": {"field": "Value #B", "max": 40, "min": 5},
+            "opacity": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 202,
+      "type": "geomap",
+      "title": "Threat Density (Country)",
+      "gridPos": {"x": 16, "y": 229, "w": 8, "h": 12},
+      "targets": [{"expr": "home_ids_country_threat_density", "format": "table", "instant": true, "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": 0, "color": "green"},
+              {"value": 1, "color": "yellow"},
+              {"value": 10, "color": "red"}
+            ]
+          }
+        }
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "lookup", "lookup": "country"},
+            "color": {"field": "Value"},
+            "size": {"field": "Value", "max": 25, "min": 5},
+            "opacity": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 211,
+      "type": "geomap",
+      "title": "DNS Query Rate by Location",
+      "gridPos": {"x": 0, "y": 241, "w": 16, "h": 12},
+      "targets": [{"expr": "home_ids_geo_queries_per_minute", "format": "table", "instant": true, "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": 0, "color": "green"},
+              {"value": 50, "color": "yellow"},
+              {"value": 200, "color": "orange"},
+              {"value": 500, "color": "red"}
+            ]
+          }
+        }
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "coords", "latitude": "latitude", "longitude": "longitude"},
+            "color": {"field": "Value"},
+            "size": {"field": "Value", "max": 35, "min": 5},
+            "opacity": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 212,
+      "type": "geomap",
+      "title": "Total Traffic by Country",
+      "gridPos": {"x": 16, "y": 241, "w": 8, "h": 12},
+      "targets": [{"expr": "sum by(country) (count_over_time(home_ids_geo_traffic_total[1h]))", "format": "table", "instant": true, "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": 0, "color": "green"},
+              {"value": 100, "color": "blue"},
+              {"value": 1000, "color": "purple"}
+            ]
+          }
+        }
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "lookup", "lookup": "country"},
+            "color": {"field": "Value"},
+            "size": {"field": "Value", "max": 30, "min": 5},
+            "opacity": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 221,
+      "type": "geomap",
+      "title": "C2 Beaconing Maps",
+      "gridPos": {"x": 0, "y": 253, "w": 16, "h": 12},
+      "targets": [{"expr": "sum by (country) (increase(home_ids_geo_beaconing_total[1h]))", "format": "table", "instant": true, "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": 0, "color": "green"},
+              {"value": 1, "color": "red"}
+            ]
+          }
+        }
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "lookup", "lookup": "country"},
+            "color": {"field": "Value"},
+            "size": {"field": "Value", "max": 30, "min": 8},
+            "opacity": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 231,
+      "type": "geomap",
+      "title": "Entropy by Country",
+      "gridPos": {"x": 16, "y": 253, "w": 8, "h": 12},
+      "targets": [{"expr": "avg by (country) (home_ids_geo_entropy)", "format": "table", "instant": true, "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": 0, "color": "green"},
+              {"value": 2.5, "color": "yellow"},
+              {"value": 3.2, "color": "red"}
+            ]
+          }
+        }
+      },
+      "options": {
+        "layers": [
+          {
+            "type": "markers",
+            "location": {"mode": "lookup", "lookup": "country"},
+            "color": {"field": "Value"},
+            "size": {"field": "Value", "max": 20, "min": 5},
+            "opacity": 1
+          }
+        ]
+      }
+    }
   ],
-  "refresh": "10s",
-  "schemaVersion": 38,
+  "schemaVersion": 30,
   "style": "dark",
-  "tags": ["home-ids","master", "ndr", "documented"],
-  "templating": {"list": [{"current": {"text": "All","value": "$__all"},"datasource": {"type": "prometheus","uid": "${DS_PROMETHEUS}"},"includeAll": true,"multi": true,"name": "device","query": "label_values(home_ids_risk_score, hostname)","refresh": 1,"type": "query"}]},
-  "time": {"from": "now-1h","to": "now"},
+  "tags": ["home-ids", "master", "ndr", "loki-integrated"],
+  "templating": {
+    "list": [
+      {
+        "current": {"text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "includeAll": true,
+        "multi": true,
+        "name": "device",
+        "query": "label_values(home_ids_risk_score, hostname)",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
   "timepicker": {},
-  "timezone": "browser",
-  "title": "Home IDS — Master Categorized NDR Map",
-  "uid": "home-ids-ndr-categorized-v12",
-  "version": 1
+  "timezone": "browser"
 }

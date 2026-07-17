@@ -207,6 +207,17 @@ events_processed_metric = Counter(
     "Processed DNS events"
 )
 
+# BUGFIX: Added dedicated Zeek operational status monitoring gauges
+zeek_status_metric = Gauge(
+    "home_ids_zeek_status",
+    "Zeek collector operational status (1=active and bound, 0=down)"
+)
+
+zeek_events_processed_metric = Counter(
+    "home_ids_zeek_events_processed_total",
+    "Total Zeek log events parsed"
+)
+
 alerts_total = Counter(
     "home_ids_alerts_total",
     "IDS alerts triggered"
@@ -282,30 +293,23 @@ ti_ioc_hits_total = Counter(
     ["source", "ioc_type"],   
 )
 
-# ── Safe list ──────────────────────────────────────────────────────────────
-# BUGFIX: main.py previously set this gauge using "risk_score < 4.0" for
-# monitored devices — an unrelated signal that didn't match this metric's
-# own description. main.py now sets 1.0 only for devices actually matched by
-# _is_safe_device() (safe_ips / safe_host_patterns) and 0.0 for every
-# monitored device, matching the description below for real.
+# ── Safe list & Status ─────────────────────────────────────────────────────
 safe_device_metric = Gauge(
     "home_ids_safe_device",
     "Device is on the safe list (1=excluded from scoring, 0=monitored)",
     _DEV_LABELS,
 )
 
+probation_status_metric = Gauge(
+    "home_ids_probation_status",
+    "Device is in cold-start probation (1=probation, 0=verified)",
+    _DEV_LABELS,
+)
+
 # ── Dynamic Limits ─────────────────────────────────────────────────────────
-# BUGFIX NOTE: this Gauge is defined but was never imported or set anywhere in
-# main.py — it's dead code. It also duplicates query_rate_threshold_limit_metric
-# below, which IS wired up (main.py sets it from the same mean + k*std_dev
-# calculation) and IS used by the dashboard's "Threat Thresholds vs Safe
-# Baseline Corridor" panel. Left defined (rather than deleted) in case external
-# tooling already scrapes home_ids_per_device_threshold, but it will always
-# read as empty/absent until something actually calls .labels(...).set(...)
-# on it. Prefer home_ids_query_rate_threshold_limit for dashboards.
 per_device_threshold_metric = Gauge(
     "home_ids_per_device_threshold",
-    "Dynamic per-device threshold limit (mean + k * std_dev)",
+    "DEAD/DUPLICATE metric. Do not use for dashboards.",
     _DEV_LABELS,
 )
 
@@ -355,7 +359,7 @@ query_rate_threshold_limit_metric = Gauge(
 )
 
 # ══════════════════════════════════════════════════════════════════════════
-# NEW: ADVANCED NDR TELEMETRY (Jitter, Evasion, Lateral Movement)
+# ADVANCED NDR TELEMETRY (Jitter, Evasion, Lateral Movement)
 # ══════════════════════════════════════════════════════════════════════════
 
 ndr_doh_bypass_metric = Gauge(
@@ -379,5 +383,33 @@ ndr_jitter_c2_metric = Gauge(
 ndr_exfil_z_metric = Gauge(
     "home_ids_outbound_bytes_zscore",
     "Payload outbound bytes baseline deviation Z-score",
+    _DEV_LABELS,
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# NEW OBSERVABILITY SIGNAL GAUGES
+# ══════════════════════════════════════════════════════════════════════════
+
+abuseipdb_risk_metric = Gauge(
+    "home_ids_abuseipdb_risk",
+    "AbuseIPDB reputation hazard severity (0=clean, 4=blocked)",
+    _DEV_LABELS,
+)
+
+virustotal_risk_metric = Gauge(
+    "home_ids_virustotal_risk",
+    "VirusTotal sandbox analysis hazard severity (0=clean, 4=malicious)",
+    _DEV_LABELS,
+)
+
+beaconing_volume_metric = Gauge(
+    "home_ids_beaconing_volume_score",
+    "Single-destination high-density traffic concentration score",
+    _DEV_LABELS,
+)
+
+jitter_cv_metric = Gauge(
+    "home_ids_jitter_cv_score",
+    "Timing uniformity coefficient of variation on active domains",
     _DEV_LABELS,
 )

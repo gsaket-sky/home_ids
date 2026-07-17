@@ -79,12 +79,10 @@ _FEEDS = {
 _OTX_URL = "https://otx.alienvault.com/api/v1/pulses/subscribed?modified_since={since}"
 
 class ThreatIntel:
-    def __init__(self, cache_dir: str = "state/ti_cache",
-                 otx_api_key: str = "",
-                 refresh_interval: int = 3600):
-        self.cache_dir        = Path(cache_dir)
+    def __init__(self, cache_dir: str = "state/ti_cache", otx_api_key: str = "", refresh_interval: int = 3600):
+        self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.otx_api_key      = otx_api_key
+        self.otx_api_key = otx_api_key
         self.refresh_interval = refresh_interval
 
         self._bad_ips:     dict[str, dict] = {}   
@@ -92,22 +90,14 @@ class ThreatIntel:
         self._bad_urls:    dict[str, dict] = {}   
         self._bad_cidrs:   list[tuple]     = []   
 
-        self._lock       = threading.RLock()
-        self._last_load  = 0.0
-        self._stats      = {"ips": 0, "domains": 0, "urls": 0, "cidrs": 0, "last_refresh": "never"}
+        self._lock = threading.RLock()
+        self._last_load = 0.0
+        self._stats = {"ips": 0, "domains": 0, "urls": 0, "cidrs": 0, "last_refresh": "never"}
         
         self._infrastructure_allowlist = frozenset({
-            "raw.githubusercontent.com",
-            "githubusercontent.com",
-            "github.com",
-            "google.com",
-            "googleapis.com",
-            "apple.com",
-            "icloud.com",
-            "microsoft.com",
-            "windows.com"
+            "raw.githubusercontent.com", "githubusercontent.com", "github.com",
+            "google.com", "googleapis.com", "apple.com", "icloud.com", "microsoft.com", "windows.com"
         })
-
         self._load_cache()
 
     def lookup_ip(self, ip: str) -> Optional[dict]:
@@ -115,11 +105,13 @@ class ThreatIntel:
             return None
         with self._lock:
             if ip in self._bad_ips:
+                LOGGER.debug("TI Hit: IP %s matched local cache", ip)
                 return self._bad_ips[ip]
             try:
                 addr = ipaddress.ip_address(ip)
                 for network, meta in self._bad_cidrs:
                     if addr in network:
+                        LOGGER.debug("TI Hit: IP %s matched CIDR block %s", ip, network)
                         return meta
             except ValueError:
                 pass
@@ -129,44 +121,38 @@ class ThreatIntel:
         if not domain:
             return None
         domain = domain.lower().strip(".")
-        
         if domain in self._infrastructure_allowlist:
             return None
-        
         with self._lock:
             if domain in self._bad_domains:
+                LOGGER.debug("TI Hit: Domain %s matched local cache", domain)
                 return self._bad_domains[domain]
             parts = domain.split(".")
             if len(parts) > 2:
                 parent = ".".join(parts[-2:])
                 if parent in self._bad_domains:
+                    LOGGER.debug("TI Hit: Domain parent %s matched local cache for %s", parent, domain)
                     return {**self._bad_domains[parent], "matched_parent": True}
         return None
 
     def lookup_url(self, url: str) -> Optional[dict]:
-        if not url:
-            return None
-        with self._lock:
-            return self._bad_urls.get(url)
+        if not url: return None
+        with self._lock: return self._bad_urls.get(url)
 
-    def check_domain(self, domain: str) -> bool:
-        return self.lookup_domain(domain) is not None
+    def check_domain(self, domain: str) -> bool: return self.lookup_domain(domain) is not None
 
     def ioc_risk_score(self, domain: str = "", ip: str = "") -> float:
         score = 0.0
         if domain:
             match = self.lookup_domain(domain)
-            if match:
-                score += match.get("confidence", 0.8) * 4.0
+            if match: score += match.get("confidence", 0.8) * 4.0
         if ip:
             match = self.lookup_ip(ip)
-            if match:
-                score += match.get("confidence", 0.8) * 4.0
+            if match: score += match.get("confidence", 0.8) * 4.0
         return min(score, 4.0)
 
     @property
-    def stats(self) -> dict:
-        return dict(self._stats)
+    def stats(self) -> dict: return dict(self._stats)
 
     def start_refresh_thread(self) -> None:
         t = threading.Thread(target=self._refresh_loop, daemon=True, name="ti-refresh")
@@ -176,71 +162,37 @@ class ThreatIntel:
     def _refresh_loop(self) -> None:
         time.sleep(10)
         while True:
-            try:
-                self._refresh_all()
-            except Exception:
-                LOGGER.exception("TI refresh failed")
+            try: self._refresh_all()
+            except Exception: LOGGER.exception("TI refresh failed")
             time.sleep(self.refresh_interval)
 
     def _refresh_all(self) -> None:
         LOGGER.info("Refreshing threat intel feeds...")
-        new_ips     = {}
-        new_domains = {}
-        new_urls    = {}
-        new_cidrs   = []
-
+        new_ips, new_domains, new_urls, new_cidrs = {}, {}, {}, []
         for feed_name, feed in _FEEDS.items():
             try:
                 cache_file = self.cache_dir / f"{feed_name}.cache"
-                data       = self._fetch_with_cache(feed["url"], cache_file, feed["ttl"])
-                if not data:
-                    continue
-
+                data = self._fetch_with_cache(feed["url"], cache_file, feed["ttl"])
+                if not data: continue
+                meta = {"source": feed_name, "tags": feed["tags"], "confidence": feed["confidence"], "malicious": True}
+                
                 ftype = feed["type"]
-                meta  = {
-                    "source":     feed_name,
-                    "tags":       feed["tags"],
-                    "confidence": feed["confidence"],
-                    "malicious":  True,
-                }
-
-                if ftype == "csv_ips":
-                    self._parse_ip_csv(data, feed, meta, new_ips, new_cidrs)
-                elif ftype == "csv_domains":
-                    self._parse_domain_csv(data, feed, meta, new_domains)
-                elif ftype == "hostfile":
-                    self._parse_hostfile(data, feed, meta, new_domains)
-                elif ftype == "csv_urls":
-                    self._parse_csv_urls(data, feed, meta, new_urls)
-                elif ftype == "threatfox_csv":
-                    self._parse_threatfox(data, meta, new_ips, new_domains, new_urls)
-
-            except Exception:
-                LOGGER.exception("Failed to process feed %s", feed_name)
+                if ftype == "csv_ips": self._parse_ip_csv(data, feed, meta, new_ips, new_cidrs)
+                elif ftype == "hostfile": self._parse_hostfile(data, feed, meta, new_domains)
+                elif ftype == "csv_urls": self._parse_csv_urls(data, feed, meta, new_urls)
+                elif ftype == "threatfox_csv": self._parse_threatfox(data, meta, new_ips, new_domains, new_urls)
+            except Exception: LOGGER.exception("Failed to process feed %s", feed_name)
 
         if self.otx_api_key:
-            try:
-                self._fetch_otx(new_ips, new_domains)
-            except Exception:
-                LOGGER.exception("OTX fetch failed")
+            try: self._fetch_otx(new_ips, new_domains)
+            except Exception: LOGGER.exception("OTX fetch failed")
 
         with self._lock:
-            self._bad_ips     = new_ips
-            self._bad_domains = new_domains
-            self._bad_urls    = new_urls
-            self._bad_cidrs   = new_cidrs
-            self._stats.update({
-                "ips":          len(new_ips),
-                "domains":      len(new_domains),
-                "urls":         len(new_urls),
-                "cidrs":        len(new_cidrs),
-                "last_refresh": time.strftime("%Y-%m-%d %H:%M:%S"),
-            })
+            self._bad_ips, self._bad_domains, self._bad_urls, self._bad_cidrs = new_ips, new_domains, new_urls, new_cidrs
+            self._stats.update({"ips": len(new_ips), "domains": len(new_domains), "urls": len(new_urls), "cidrs": len(new_cidrs), "last_refresh": time.strftime("%Y-%m-%d %H:%M:%S")})
             self._last_load = time.time()
-
         self._save_cache(new_ips, new_domains, new_urls, new_cidrs)
-        LOGGER.info("TI refresh complete: %d IPs, %d domains, %d URLs, %d CIDRs",
-                    len(new_ips), len(new_domains), len(new_urls), len(new_cidrs))
+        LOGGER.info("TI refresh complete: %d IPs, %d domains, %d URLs, %d CIDRs", len(new_ips), len(new_domains), len(new_urls), len(new_cidrs))
 
     def _parse_ip_csv(self, data, feed, meta, ips, cidrs):
         for row in csv.reader(data.splitlines()):
@@ -254,21 +206,6 @@ class ThreatIntel:
                 else:
                     ipaddress.ip_address(raw)
                     ips[raw] = {**meta, "ip": raw}
-            except (ValueError, IndexError): pass
-
-    def _parse_domain_csv(self, data, feed, meta, domains):
-        from urllib.parse import urlparse
-        col = feed.get("domain_col", 0)
-        for row in csv.reader(data.splitlines()):
-            if not row or row[0].startswith(feed.get("comment", "#")): continue
-            try:
-                raw = row[col].strip().strip('"')
-                if not raw: continue
-                if raw.startswith("http"):
-                    raw = urlparse(raw).hostname or ""
-                raw = raw.lower().strip(".")
-                if raw and "." in raw:
-                    domains[raw] = {**meta, "domain": raw}
             except (ValueError, IndexError): pass
 
     def _parse_hostfile(self, data, feed, meta, domains):
@@ -290,8 +227,7 @@ class ThreatIntel:
                 if raw.startswith("http"):
                     parsed = urlparse(raw)
                     url_no_proto = f"{parsed.hostname}{parsed.path}"
-                    if parsed.query:
-                        url_no_proto += f"?{parsed.query}"
+                    if parsed.query: url_no_proto += f"?{parsed.query}"
                     urls[url_no_proto] = {**meta, "url": raw}
             except (ValueError, IndexError): pass
 
@@ -300,12 +236,11 @@ class ThreatIntel:
         for row in csv.reader(data.splitlines()):
             if not row or row[0].startswith("#") or len(row) < 3: continue
             try:
-                ioc_type  = row[2].strip().lower()
-                ioc_value = row[1].strip().strip('"')
+                ioc_type, ioc_value = row[2].strip().lower(), row[1].strip().strip('"')
                 confidence = float(row[5]) / 100 if len(row) > 5 else 0.8
-                tags       = [t.strip() for t in row[6].split(",")] if len(row) > 6 else []
+                tags = [t.strip() for t in row[6].split(",")] if len(row) > 6 else []
                 entry = {**meta, "confidence": confidence, "tags": meta["tags"] + tags}
-
+                
                 if ioc_type in ("ip:port", "ip"):
                     ip = ioc_value.split(":")[0]
                     ipaddress.ip_address(ip)
@@ -314,36 +249,25 @@ class ThreatIntel:
                     if ioc_type == "url" and ioc_value.startswith("http"):
                         parsed = urlparse(ioc_value)
                         url_no_proto = f"{parsed.hostname}{parsed.path}"
-                        if parsed.query:
-                            url_no_proto += f"?{parsed.query}"
+                        if parsed.query: url_no_proto += f"?{parsed.query}"
                         urls[url_no_proto] = {**entry, "url": ioc_value}
                     else:
                         if ioc_value.startswith("http"):
                             ioc_value = urlparse(ioc_value).hostname or ""
                         dom = ioc_value.lower().strip(".")
-                        if dom and "." in dom:
-                            domains[dom] = {**entry, "domain": dom}
+                        if dom and "." in dom: domains[dom] = {**entry, "domain": dom}
             except Exception: pass
 
     def _fetch_otx(self, ips, domains):
         since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - self.refresh_interval * 2))
-        url = _OTX_URL.format(since=since)
-        req = Request(url, headers={"X-OTX-API-KEY": self.otx_api_key, "User-Agent": "home-ids/1.0"})
+        req = Request(_OTX_URL.format(since=since), headers={"X-OTX-API-KEY": self.otx_api_key, "User-Agent": "home-ids/1.0"})
         try:
-            with urlopen(req, timeout=15) as r:
-                data = json.loads(r.read())
+            with urlopen(req, timeout=15) as r: data = json.loads(r.read())
             for pulse in data.get("results", []):
                 tags = pulse.get("tags", [])
                 for ioc in pulse.get("indicators", []):
-                    itype = ioc.get("type", "")
-                    val   = ioc.get("indicator", "").strip()
-                    entry = {
-                        "malicious":  True,
-                        "source":     "otx",
-                        "tags":       tags,
-                        "confidence": 0.80,
-                        "pulse":      pulse.get("name", ""),
-                    }
+                    itype, val = ioc.get("type", ""), ioc.get("indicator", "").strip()
+                    entry = {"malicious": True, "source": "otx", "tags": tags, "confidence": 0.80, "pulse": pulse.get("name", "")}
                     if itype == "IPv4" and val:
                         try:
                             ipaddress.ip_address(val)
@@ -354,45 +278,27 @@ class ThreatIntel:
                         if val.startswith("http"):
                             val = urlparse(val).hostname or ""
                         val = val.lower().strip(".")
-                        if val and "." in val:
-                            domains[val] = {**entry, "domain": val}
-        except Exception:
-            LOGGER.warning("OTX fetch failed")
+                        if val and "." in val: domains[val] = {**entry, "domain": val}
+        except Exception: LOGGER.warning("OTX fetch failed")
 
     def _save_cache(self, ips, domains, urls, cidrs) -> None:
         try:
-            payload = {
-                "ips":     ips,
-                "domains": domains,
-                "urls":    urls,
-                "cidrs":   [[str(n), m] for n, m in cidrs],
-                "saved":   time.time(),
-            }
-            cache_file = self.cache_dir / "combined.json.gz"
-            with gzip.open(cache_file, "wt", encoding="utf-8") as f:
-                json.dump(payload, f)
-        except Exception:
-            LOGGER.warning("Could not save TI cache")
+            payload = {"ips": ips, "domains": domains, "urls": urls, "cidrs": [[str(n), m] for n, m in cidrs], "saved": time.time()}
+            with gzip.open(self.cache_dir / "combined.json.gz", "wt", encoding="utf-8") as f: json.dump(payload, f)
+        except Exception: LOGGER.warning("Could not save TI cache")
 
     def _load_cache(self) -> None:
         cache_file = self.cache_dir / "combined.json.gz"
         if not cache_file.exists(): return
         try:
-            with gzip.open(cache_file, "rt", encoding="utf-8") as f:
-                payload = json.load(f)
-            age = time.time() - payload.get("saved", 0)
-            if age > 86400:
-                return
+            with gzip.open(cache_file, "rt", encoding="utf-8") as f: payload = json.load(f)
+            if time.time() - payload.get("saved", 0) > 86400: return
             cidrs = []
             for net_str, meta in payload.get("cidrs", []):
-                try:
-                    cidrs.append((ipaddress.ip_network(net_str, strict=False), meta))
+                try: cidrs.append((ipaddress.ip_network(net_str, strict=False), meta))
                 except ValueError: pass
             with self._lock:
-                self._bad_ips     = payload.get("ips",     {})
-                self._bad_domains = payload.get("domains", {})
-                self._bad_urls    = payload.get("urls",    {})
-                self._bad_cidrs   = cidrs
+                self._bad_ips, self._bad_domains, self._bad_urls, self._bad_cidrs = payload.get("ips", {}), payload.get("domains", {}), payload.get("urls", {}), cidrs
                 self._stats.update({
                     "ips":          len(self._bad_ips),
                     "domains":      len(self._bad_domains),
@@ -400,92 +306,58 @@ class ThreatIntel:
                     "cidrs":        len(cidrs),
                     "last_refresh": "from cache",
                 })
-        except Exception:
-            LOGGER.warning("Could not load TI cache")
+        except Exception: LOGGER.warning("Could not load TI cache")
 
     def _fetch_with_cache(self, url: str, cache_file: Path, ttl: int) -> Optional[str]:
-        if cache_file.exists():
-            age = time.time() - cache_file.stat().st_mtime
-            if age < ttl:
-                return cache_file.read_text(encoding="utf-8", errors="ignore")
+        if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < ttl:
+            return cache_file.read_text(encoding="utf-8", errors="ignore")
         try:
             req = Request(url, headers={"User-Agent": "home-ids/1.0"})
-            with urlopen(req, timeout=20) as r:
-                data = r.read().decode("utf-8", errors="ignore")
+            with urlopen(req, timeout=20) as r: data = r.read().decode("utf-8", errors="ignore")
             cache_file.write_text(data, encoding="utf-8")
             return data
         except URLError as exc:
             LOGGER.warning("Failed to fetch %s: %s", url, exc)
-            if cache_file.exists():
-                return cache_file.read_text(encoding="utf-8", errors="ignore")
-            return None
+            return cache_file.read_text(encoding="utf-8", errors="ignore") if cache_file.exists() else None
 
 # ══════════════════════════════════════════════════════════════════════════
 # AbuseIPDB integration
 # ══════════════════════════════════════════════════════════════════════════
 
 class AbuseIPDB:
-    _BLACKLIST_URL = (
-        "https://api.abuseipdb.com/api/v2/blacklist"
-        "?confidenceMinimum=75&limit=10000&plaintext"
-    )
-
-    def __init__(self, api_key: str, cache_dir: Path,
-                 refresh_interval: int = 3600,
-                 confidence_threshold: int = 75):
-        self.api_key            = api_key
-        self.cache_file         = cache_dir / "abuseipdb_blacklist.txt"
-        self.refresh_interval   = refresh_interval
+    _BLACKLIST_URL = "https://api.abuseipdb.com/api/v2/blacklist?confidenceMinimum=75&limit=10000&plaintext"
+    
+    def __init__(self, api_key: str, cache_dir: Path, refresh_interval: int = 3600, confidence_threshold: int = 75):
+        self.api_key = api_key
+        self.cache_file = cache_dir / "abuseipdb_blacklist.txt"
+        self.refresh_interval = refresh_interval
         self.confidence_threshold = confidence_threshold
         self._bad_ips: set[str] = set()
-        self._lock              = threading.RLock()
-        self._stats             = {"count": 0, "last_refresh": "never"}
+        self._lock = threading.RLock()
+        self._stats = {"count": 0, "last_refresh": "never"}
         self._load_cache()
 
     def start_refresh_thread(self) -> None:
-        t = threading.Thread(
-            target=self._refresh_loop,
-            daemon=True,
-            name="abuseipdb-refresh"
-        )
-        t.start()
+        threading.Thread(target=self._refresh_loop, daemon=True, name="abuseipdb-refresh").start()
 
     def _refresh_loop(self) -> None:
         time.sleep(15)
         while True:
-            try:
-                self._refresh()
-            except Exception:
-                LOGGER.exception("AbuseIPDB refresh failed")
+            try: self._refresh()
+            except Exception: LOGGER.exception("AbuseIPDB refresh failed")
             time.sleep(self.refresh_interval)
 
     def _refresh(self) -> None:
-        if not self.api_key:
-            return
-
-        if self.cache_file.exists():
-            age = time.time() - self.cache_file.stat().st_mtime
-            if age < self.refresh_interval:
-                self._load_cache()
-                return
-
+        if not self.api_key: return
+        if self.cache_file.exists() and (time.time() - self.cache_file.stat().st_mtime) < self.refresh_interval:
+            self._load_cache(); return
         try:
-            req = Request(
-                self._BLACKLIST_URL,
-                headers={
-                    "Key":         self.api_key,
-                    "Accept":      "text/plain",
-                    "User-Agent":  "home-ids/1.0",
-                }
-            )
-            with urlopen(req, timeout=30) as r:
-                data = r.read().decode("utf-8", errors="ignore")
-
+            req = Request(self._BLACKLIST_URL, headers={"Key": self.api_key, "Accept": "text/plain", "User-Agent": "home-ids/1.0"})
+            with urlopen(req, timeout=30) as r: data = r.read().decode("utf-8", errors="ignore")
             self.cache_file.write_text(data, encoding="utf-8")
             self._parse(data)
             LOGGER.info("AbuseIPDB blacklist refreshed: %d IPs", len(self._bad_ips))
-
-        except URLError as exc:
+        except URLError as exc: 
             LOGGER.warning("AbuseIPDB fetch failed: %s — using stale cache", exc)
             self._load_cache()
 
@@ -493,38 +365,30 @@ class AbuseIPDB:
         new_ips: set[str] = set()
         for line in data.splitlines():
             line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+            if not line or line.startswith("#"): continue
             try:
                 ipaddress.ip_address(line)
                 new_ips.add(line)
-            except ValueError:
-                pass
-        with self._lock:
+            except ValueError: pass
+        with self._lock: 
             self._bad_ips = new_ips
             self._stats.update({
-                "count":        len(new_ips),
+                "count": len(new_ips),
                 "last_refresh": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
 
     def _load_cache(self) -> None:
         if self.cache_file.exists():
-            try:
-                data = self.cache_file.read_text(encoding="utf-8", errors="ignore")
-                self._parse(data)
-            except Exception:
-                pass
+            try: self._parse(self.cache_file.read_text(encoding="utf-8", errors="ignore"))
+            except Exception: pass
 
     def lookup(self, ip: str) -> bool:
-        if not ip or ip == "unknown":
-            return False
-        with self._lock:
-            return ip in self._bad_ips
+        if not ip or ip == "unknown": return False
+        with self._lock: return ip in self._bad_ips
 
     @property
     def stats(self) -> dict:
         return dict(self._stats)
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # VirusTotal integration
@@ -537,59 +401,45 @@ class VirusTotalClient:
     CRITICAL FIX: Replaced O(N^2) dynamic array locking with O(1) tracking sets 
     and Python HeapQueues to completely eliminate CPU thread starvation loops.
     """
-
-    _BASE       = "https://www.virustotal.com/api/v3"
-    _RATE_DELAY = 16.0     
-    _DAILY_CAP  = 480      
-
+    _BASE, _RATE_DELAY, _DAILY_CAP = "https://www.virustotal.com/api/v3", 16.0, 480
+    
     def __init__(self, api_key: str, cache_dir: Path):
-        self.api_key    = api_key
-        self.cache_file = cache_dir / "vt_cache.json.gz"
-        self._cache:    dict[str, dict] = {}   
+        self.api_key, self.cache_file = api_key, cache_dir / "vt_cache.json.gz"
+        self._cache: dict[str, dict] = {}
         
         # FIX: Implement O(1) set to prevent array sorting locks
-        self._queue:    list[tuple]     = []   
-        self._queued_items: set[str]    = set()
+        self._queue: list[tuple] = []
+        self._queued_items: set[str] = set()
         
-        self._lock      = threading.RLock()
-        self._last_req  = 0.0
-        self._today_count   = 0
-        self._today_date    = ""
+        self._lock = threading.RLock()
+        self._last_req = 0.0
+        self._today_count = 0
+        self._today_date = ""
 
         self._load_cache()
 
-        if api_key:
-            t = threading.Thread(
-                target=self._worker_loop,
-                daemon=True,
-                name="vt-worker"
-            )
+        if api_key: 
+            t = threading.Thread(target=self._worker_loop, daemon=True, name="vt-worker")
             t.start()
             LOGGER.info("VirusTotal client started (cap=%d/day)", self._DAILY_CAP)
 
     def enqueue_domain(self, domain: str, priority: int = 5) -> None:
-        if not self.api_key or not domain:
-            return
+        if not self.api_key or not domain: return
         key = f"domain:{domain}"
         with self._lock:
-            if self._is_cached(key):
-                return
-            # FIX: Fast O(1) tracking. No more O(N^2) array list loops.
-            if key not in self._queued_items:
+            if not self._is_cached(key) and key not in self._queued_items:
                 self._queued_items.add(key)
-                # Time used as secondary tuple sort key to break priority ties safely
                 heapq.heappush(self._queue, (priority, time.time(), "domain", domain))
+                LOGGER.debug("Enqueued domain for VT lookup: %s", domain)
 
     def enqueue_ip(self, ip: str, priority: int = 5) -> None:
-        if not self.api_key or not ip or ip == "unknown":
-            return
+        if not self.api_key or not ip or ip == "unknown": return
         key = f"ip:{ip}"
         with self._lock:
-            if self._is_cached(key):
-                return
-            if key not in self._queued_items:
+            if not self._is_cached(key) and key not in self._queued_items:
                 self._queued_items.add(key)
                 heapq.heappush(self._queue, (priority, time.time(), "ip", ip))
+                LOGGER.debug("Enqueued IP for VT lookup: %s", ip)
 
     def get_result(self, ioc_type: str, value: str) -> dict | None:
         key = f"{ioc_type}:{value}"
@@ -600,22 +450,18 @@ class VirusTotalClient:
         return None
 
     def is_malicious(self, ioc_type: str, value: str, threshold: int = 3) -> bool:
-        result = self.get_result(ioc_type, value)
-        if not result:
-            return False
-        stats = result.get("last_analysis_stats", {})
-        return stats.get("malicious", 0) >= threshold
+        res = self.get_result(ioc_type, value)
+        return res and res.get("last_analysis_stats", {}).get("malicious", 0) >= threshold
 
     def risk_contribution(self, ioc_type: str, value: str) -> float:
-        result = self.get_result(ioc_type, value)
-        if not result:
-            return 0.0
-        stats     = result.get("last_analysis_stats", {})
-        malicious = stats.get("malicious",  0)
-        suspicious= stats.get("suspicious", 0)
-        total     = sum(stats.values()) or 1
+        res = self.get_result(ioc_type, value)
+        if not res: return 0.0
+        stats = res.get("last_analysis_stats", {})
+        malicious = stats.get("malicious", 0)
+        suspicious = stats.get("suspicious", 0)
+        total = sum(stats.values()) or 1
         mal_ratio = (malicious + suspicious * 0.5) / total
-        return min(mal_ratio * 6.0, 4.0) 
+        return min(mal_ratio * 6.0, 4.0)
 
     @property
     def stats(self) -> dict:
@@ -673,25 +519,18 @@ class VirusTotalClient:
                 self._last_req = time.time()
 
     def _query(self, ioc_type: str, value: str) -> dict:
-        if ioc_type == "domain":
-            url = f"{self._BASE}/domains/{value}"
-        elif ioc_type == "ip":
-            url  = f"{self._BASE}/ip_addresses/{value}"
-        else:
-            return {}
+        if ioc_type == "domain": url = f"{self._BASE}/domains/{value}"
+        elif ioc_type == "ip": url = f"{self._BASE}/ip_addresses/{value}"
+        else: return {}
 
-        req = Request(url, headers={
-            "x-apikey":    self.api_key,
-            "User-Agent":  "home-ids/1.0",
-        })
-        with urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
+        req = Request(url, headers={"x-apikey": self.api_key, "User-Agent": "home-ids/1.0"})
+        with urlopen(req, timeout=15) as r: data = json.loads(r.read())
         attrs = data.get("data", {}).get("attributes", {})
         return {
             "last_analysis_stats": attrs.get("last_analysis_stats", {}),
-            "reputation":          attrs.get("reputation", 0),
-            "categories":          attrs.get("categories", {}),
-            "last_analysis_date":  attrs.get("last_analysis_date", 0),
+            "reputation": attrs.get("reputation", 0),
+            "categories": attrs.get("categories", {}),
+            "last_analysis_date": attrs.get("last_analysis_date", 0),
         }
 
     def _is_cached(self, key: str) -> bool:
@@ -700,25 +539,16 @@ class VirusTotalClient:
 
     def _save_cache(self) -> None:
         try:
-            with self._lock:
-                data = dict(self._cache)
-            with gzip.open(self.cache_file, "wt", encoding="utf-8") as f:
-                json.dump(data, f)
-        except Exception:
-            pass
+            with self._lock: data = dict(self._cache)
+            with gzip.open(self.cache_file, "wt", encoding="utf-8") as f: json.dump(data, f)
+        except Exception: pass
 
     def _load_cache(self) -> None:
-        if not self.cache_file.exists():
-            return
+        if not self.cache_file.exists(): return
         try:
-            with gzip.open(self.cache_file, "rt", encoding="utf-8") as f:
-                data = json.load(f)
+            with gzip.open(self.cache_file, "rt", encoding="utf-8") as f: data = json.load(f)
             now = time.time()
-            with self._lock:
-                self._cache = {
-                    k: v for k, v in data.items()
-                    if v.get("expires", 0) > now
-                }
+            with self._lock: 
+                self._cache = {k: v for k, v in data.items() if v.get("expires", 0) > now}
             LOGGER.info("Loaded %d VT cache entries", len(self._cache))
-        except Exception:
-            pass
+        except Exception: pass

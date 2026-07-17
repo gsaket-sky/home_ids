@@ -53,7 +53,6 @@ _MAX_EVENTS_PER_DEVICE  = 10_000
 # 2_000 gives 10× headroom and bounds RAM at ~120 KB/device.
 _MAX_DOMAINS_PER_DEVICE = 2_000
 
-
 class RollingWindow:
     # UPDATED: Added domain_timestamps allocation slot to bypass standard class dictionary overhead
     __slots__ = ('events', 'domains', 'blocked', 'nxdomain', 'domain_timestamps')
@@ -77,11 +76,8 @@ class RollingWindow:
         eviction pass. Domains with count near 0 are stale anyway.
         """
         if len(self.domains) > _MAX_DOMAINS_PER_DEVICE:
-            # Keep the top-N by count — most recently active domains
-            # have the highest decayed count values.
             keep = self.domains.most_common(_MAX_DOMAINS_PER_DEVICE)
             self.domains = Counter(dict(keep))
-
 
 class BaselineMetric:
     # ADDED FIXED 2.2: __slots__ optimization enforced for diurnal metrics container properties.
@@ -139,7 +135,6 @@ class BaselineMetric:
             obj.n = [n, n]
         return obj
 
-
 class DeviceState:
     # UPDATED: Extended slots layout to include outbound_bytes_baseline tracking profiles
     __slots__ = (
@@ -168,7 +163,7 @@ class DeviceState:
         # Cap reduced from 20_000 → 5_000: sufficient for the new_domains
         # signal (we only care whether a domain is "new this window") and
         # 5_000 × ~60 bytes = 300 KB per device vs 1.2 MB previously.
-        self.seen_domains: dict = {}   # domain → None (ordered set)
+        self.seen_domains: dict = {}   
 
         self.rate_baseline = BaselineMetric(alpha)
         self.entropy_baseline = BaselineMetric(alpha)
@@ -198,7 +193,7 @@ class DeviceState:
             "blocked_baseline": self.blocked_baseline.to_dict(),
             "dga_baseline": self.dga_baseline.to_dict(),
             "risk_baseline": self.risk_baseline.to_dict(),
-            "outbound_bytes_baseline": self.outbound_bytes_baseline.to_dict(), # NEW: Save tracking metric
+            "outbound_bytes_baseline": self.outbound_bytes_baseline.to_dict(), 
             "seen_domains": list(self.seen_domains),
         }
 
@@ -217,7 +212,7 @@ class DeviceState:
         if "blocked_baseline" in d: obj.blocked_baseline = BaselineMetric.from_dict(d["blocked_baseline"])
         if "dga_baseline" in d: obj.dga_baseline = BaselineMetric.from_dict(d["dga_baseline"])
         if "risk_baseline" in d: obj.risk_baseline = BaselineMetric.from_dict(d["risk_baseline"])
-        if "outbound_bytes_baseline" in d: obj.outbound_bytes_baseline = BaselineMetric.from_dict(d["outbound_bytes_baseline"]) # NEW: Restore tracking metric
+        if "outbound_bytes_baseline" in d: obj.outbound_bytes_baseline = BaselineMetric.from_dict(d["outbound_bytes_baseline"]) 
         
         # Restore seen_domains as insertion-ordered dict regardless of
         # what format it was saved in (list from old code, or dict keys).

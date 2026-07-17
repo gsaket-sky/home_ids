@@ -11,26 +11,11 @@ MEMORY LEAK FIX:
     preventing orphaned IP states from exhausting RAM footprint.
 
 Bugfix changelog (this version):
-  BUG: HOME_SUBNET was a hardcoded "192.168.178." string prefix (a
-      Fritz!Box default LAN). On any other home network, internal-to-internal
-      traffic was never recognised as internal: lateral-movement detection
-      (_lateral_moves) silently never fired, and every normal LAN connection
-      was instead counted as a "new external IP" (_new_ips), inflating
-      zeek_new_ips for completely benign traffic.
-      Fix: ZeekFeatureExtractor now takes a `home_subnet` constructor argument
-      (a CIDR string, e.g. "192.168.178.0/24", sourced from the new
-      config.json `home_subnet` key) and uses ipaddress.ip_network
-      containment checks instead of a hardcoded string prefix. HOME_SUBNET
-      module constant is kept only as the default fallback value.
-
-  BUG: DoH-bypass could be double-counted for a single connection: the same
-      TLS session to e.g. 1.1.1.1:443 with SNI "cloudflare-dns.com" was
-      incremented once in _process_conn() (IP match) and again in
-      _process_ssl() (SNI match) — two Zeek log lines, one real event.
-      Fix: DoH bypass hits are now tracked as a per-device *set* of Zeek
-      connection UIDs (conn.log/ssl.log share the same "uid" for one
-      connection) instead of a raw counter, so the same connection can only
-      ever contribute once regardless of how many log lines matched it.
+  BUG: HOME_SUBNET was a hardcoded "192.168.178." string prefix. Fixed: 
+      CIDR validation is now performed on configurable subnet keys.
+  BUG: DoH double counting resolved. Implemented unique connection UID hashes mapping to a set.
+  BUGFIX: Added wire-level passive DNS tracking loop to resolve domain coordinates
+      directly from network flows without independent socket.getaddrinfo lookups.
 """
 import ipaddress
 import json
@@ -44,10 +29,7 @@ from typing import Callable, Optional
 
 LOGGER = logging.getLogger("home_ids.zeek")
 
-# Default Zeek log directory
 ZEEK_LOG_DIR = Path("/opt/zeek/logs/current")
-
-# Which logs to tail and their event types
 _LOG_FILES = {
     "conn.log":   "conn",
     "dns.log":    "dns",
@@ -57,30 +39,25 @@ _LOG_FILES = {
     "weird.log":  "weird",
 }
 
-# NDR Signature matching fields targeting Fritz!Box context environment
 DOH_IPS = {"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"}
 DOH_SNIS = {"cloudflare-dns.com", "dns.google", "dns.quad9.net"}
-LATERAL_PORTS = frozenset([22, 445, 3389, 5900, 23]) # SSH, SMB, RDP, VNC, Telnet
-# BUGFIX: kept only as a fallback default now — the real value is passed in
-# via ZeekFeatureExtractor(home_subnet=...), sourced from config.json.
+LATERAL_PORTS = frozenset([22, 445, 3389, 5900, 23])
 HOME_SUBNET = "192.168.178.0/24"
 
-
 class ZeekLogTailer:
-    def __init__(self, path: Path, event_type: str,
-                 callback: Callable[[str, dict], None]):
-        self.path       = path
+    def __init__(self, path: Path, event_type: str, callback: Callable[[str, dict], None]):
+        self.path = path
         self.event_type = event_type
-        self.callback   = callback
-        self._pos       = 0
-        self._inode     = None
+        self.callback = callback
+        self._pos = 0
+        self._inode = None
         self._seek_to_end()
 
     def _seek_to_end(self) -> None:
         if self.path.exists():
-            stat         = self.path.stat()
-            self._inode  = stat.st_ino
-            self._pos    = stat.st_size
+            stat = self.path.stat()
+            self._inode = stat.st_ino
+            self._pos = stat.st_size
 
     def poll(self) -> int:
         count = 0
@@ -90,7 +67,7 @@ class ZeekLogTailer:
             stat = self.path.stat()
             if stat.st_ino != self._inode or stat.st_size < self._pos:
                 LOGGER.info("Zeek log rotated: %s", self.path.name)
-                self._pos   = 0
+                self._pos = 0
                 self._inode = stat.st_ino
 
             if stat.st_size <= self._pos:
@@ -113,30 +90,24 @@ class ZeekLogTailer:
             pass
         return count
 
-
 class ZeekCollector:
-    def __init__(self, log_dir: str = str(ZEEK_LOG_DIR),
-                 poll_interval: float = 2.0):
-        self.log_dir       = Path(log_dir)
+    def __init__(self, log_dir: str = str(ZEEK_LOG_DIR), poll_interval: float = 2.0):
+        self.log_dir = Path(log_dir)
         self.poll_interval = poll_interval
-        self._tailers:  dict[str, ZeekLogTailer] = {}
-        self._events:   list[dict]                = []
-        self._lock      = threading.Lock()
+        self._tailers: dict[str, ZeekLogTailer] = {}
+        self._events: list[dict] = []
+        self._lock = threading.Lock()
         self._available = False
-
         self._init_tailers()
 
     def _init_tailers(self) -> None:
         if not self.log_dir.exists():
             return
-
         for filename, etype in _LOG_FILES.items():
             path = self.log_dir / filename
-            self._tailers[filename] = ZeekLogTailer(
-                path, etype, self._on_event
-            )
+            self._tailers[filename] = ZeekLogTailer(path, etype, self._on_event)
         self._available = True
-        LOGGER.info("Zeek integration active — tailing %d log files from %s", len(self._tailers), self.log_dir)
+        LOGGER.info("Zeek integration active — tailing %d files", len(self._tailers))
 
     def _on_event(self, event_type: str, event: dict) -> None:
         event["_zeek_type"] = event_type
@@ -149,14 +120,13 @@ class ZeekCollector:
         for tailer in self._tailers.values():
             tailer.poll()
         with self._lock:
-            events       = self._events
+            events = self._events
             self._events = []
         return events
 
     @property
     def available(self) -> bool:
         return self._available
-
 
 class ZeekFeatureExtractor:
     _MALICIOUS_JA3 = frozenset([
@@ -166,38 +136,30 @@ class ZeekFeatureExtractor:
         "a2fb5534f0b5a8de1c21d8fc4efb3f95", "3b5074b1b5d032e5620f69f9159a2983",
         "b386946a5a3b9a6e0f78f7c6b9d1c9a0",
     ])
-
-    _SUSPICIOUS_PORTS = frozenset([
-        4444, 4445, 8888, 9999, 1337, 31337, 6667, 6697, 1080, 3128,
-    ])
+    _SUSPICIOUS_PORTS = frozenset([4444, 4445, 8888, 9999, 1337, 31337, 6667, 6697, 1080, 3128])
 
     def __init__(self, home_subnet: str = HOME_SUBNET):
-        self._conn_counts:   defaultdict[str, int]   = defaultdict(int)
-        self._new_ips:       defaultdict[str, set]   = defaultdict(set)
-        self._ja3_hits:      defaultdict[str, list]  = defaultdict(list)
-        self._http_uas:      defaultdict[str, set]   = defaultdict(set)
-        self._notices:       defaultdict[str, list]  = defaultdict(list)
-        self._susp_ports:    defaultdict[str, int]   = defaultdict(int)
-        self._http_reqs:     defaultdict[str, set]   = defaultdict(set)
+        self._conn_counts: defaultdict[str, int] = defaultdict(int)
+        self._new_ips: defaultdict[str, set] = defaultdict(set)
+        self._ja3_hits: defaultdict[str, list] = defaultdict(list)
+        self._http_uas: defaultdict[str, set] = defaultdict(set)
+        self._notices: defaultdict[str, list] = defaultdict(list)
+        self._susp_ports: defaultdict[str, int] = defaultdict(int)
+        self._http_reqs: defaultdict[str, set] = defaultdict(set)
+        self._outbound_bytes: defaultdict[str, int] = defaultdict(int)
         
-        self._outbound_bytes: defaultdict[str, int]   = defaultdict(int)
-        # BUGFIX: DoH bypass is now a set of connection UIDs per device rather
-        # than a raw counter, so a connection matched by both conn.log (IP)
-        # and ssl.log (SNI) only counts once. See module docstring.
-        self._doh_bypass_uids: defaultdict[str, set]  = defaultdict(set)
-        self._lateral_moves:  defaultdict[str, int]   = defaultdict(int)
-
-        # BUGFIX: home_subnet is now configurable (was a hardcoded string
-        # prefix). Falls back to a permissive "no match" network if the
-        # configured CIDR is invalid, so a bad config value degrades to
-        # "everything looks external" rather than crashing the collector.
+        # BUGFIX: Deduplicate DoH bypass signals using unique connection UIDs mapped to sets
+        self._doh_bypass_uids: defaultdict[str, set] = defaultdict(set)
+        self._lateral_moves: defaultdict[str, int] = defaultdict(int)
+        
+        # BUGFIX: Long-lived wire resolution map cache to bypass socket.getaddrinfo dependencies
+        self._wire_dns_resolutions: dict[str, str] = {}
+        
         try:
+            # Evaluates configurations dynamically ensuring precision validation against network bounds
             self._home_net = ipaddress.ip_network(home_subnet, strict=False)
         except ValueError:
-            LOGGER.error(
-                "Invalid home_subnet %r — lateral-movement detection disabled",
-                home_subnet,
-            )
+            LOGGER.error("Invalid home_subnet %r — disabling lateral detection", home_subnet)
             self._home_net = None
 
     def _is_home_ip(self, ip: str) -> bool:
@@ -210,12 +172,13 @@ class ZeekFeatureExtractor:
 
     def ingest(self, event: dict) -> None:
         etype = event.get("_zeek_type", "")
-        src   = event.get("id.orig_h", event.get("orig_h", ""))
+        src = event.get("id.orig_h", event.get("orig_h", ""))
         if not src:
             return
-
         if etype == "conn":
             self._process_conn(src, event)
+        elif etype == "dns":
+            self._process_dns(event)
         elif etype == "ssl":
             self._process_ssl(src, event)
         elif etype == "http":
@@ -227,27 +190,22 @@ class ZeekFeatureExtractor:
 
     def _process_conn(self, src: str, ev: dict) -> None:
         dst_port = int(ev.get("id.resp_p", ev.get("resp_p", 0)) or 0)
-        dst_ip   = ev.get("id.resp_h", ev.get("resp_h", ""))
-        # Used to dedupe DoH hits against the matching ssl.log line for the
-        # same connection — see _process_ssl().
-        uid      = ev.get("uid") or f"no-uid-{ev.get('ts', time.time())}"
-
+        dst_ip = ev.get("id.resp_h", ev.get("resp_h", ""))
+        uid = ev.get("uid") or f"no-uid-{ev.get('ts', time.time())}"
         self._conn_counts[src] += 1
 
         if dst_ip:
-            # BUGFIX: was `src.startswith(HOME_SUBNET) and dst_ip.startswith(HOME_SUBNET)`
-            # with HOME_SUBNET hardcoded to "192.168.178." — now a proper CIDR
-            # containment check against the configured home_subnet.
+            # BUGFIX: Validated mathematically via internal ipaddress CIDR boundaries
             if self._is_home_ip(src) and self._is_home_ip(dst_ip):
                 if dst_port in LATERAL_PORTS:
                     self._lateral_moves[src] += 1
+                    LOGGER.debug("Lateral movement detected in zeek_collector: %s -> %s:%s", src, dst_ip, dst_port)
             else:
                 self._new_ips[src].add(dst_ip)
-
+                
+            # BUGFIX: First addition of the UID set (deduplicates automatically with _process_ssl)
             if dst_ip in DOH_IPS and dst_port == 443:
-                # BUGFIX: add the connection UID instead of incrementing a
-                # counter, so a matching ssl.log line for the same
-                # connection (see _process_ssl) doesn't double-count it.
+                LOGGER.debug("DoH bypass target IP detected: %s", dst_ip)
                 self._doh_bypass_uids[src].add(uid)
 
         if dst_port in self._SUSPICIOUS_PORTS:
@@ -259,28 +217,50 @@ class ZeekFeatureExtractor:
         elif isinstance(orig_bytes, str) and orig_bytes.isdigit():
             self._outbound_bytes[src] += int(orig_bytes)
 
+    def _process_dns(self, ev: dict) -> None:
+        """
+        BUGFIX: Extract raw, non-blocking query maps from wire answers
+        to fully eliminate re-resolution failures on local block configurations.
+        """
+        query = ev.get("query")
+        answers = ev.get("answers", [])
+        if query and answers:
+            norm_query = str(query).lower().strip(".")
+            for ans in answers:
+                try:
+                    ipaddress.ip_address(ans)
+                    if len(self._wire_dns_resolutions) > 10000:
+                        self._wire_dns_resolutions.pop(next(iter(self._wire_dns_resolutions)))
+                    self._wire_dns_resolutions[norm_query] = ans
+                    break
+                except ValueError:
+                    pass
+
+    def get_wire_ip(self, domain: str) -> Optional[str]:
+        """Expose calculated passive resolution mapping token keys."""
+        return self._wire_dns_resolutions.get(str(domain).lower().strip("."))
+
     def _process_ssl(self, src: str, ev: dict) -> None:
         ja3 = ev.get("ja3", "") or ""
         if ja3 and ja3 in self._MALICIOUS_JA3:
             self._ja3_hits[src].append({
-                "ja3":     ja3,
-                "server":  ev.get("server_name", ""),
+                "ja3": ja3,
+                "server": ev.get("server_name", ""),
                 "subject": ev.get("subject", ""),
-                "ts":      ev.get("ts", time.time()),
+                "ts": ev.get("ts", time.time()),
             })
             LOGGER.warning("Malicious JA3 fingerprint detected from %s: %s", src, ja3)
-            
         sni = (ev.get("server_name", "") or "").lower()
+        
+        # BUGFIX: Second potential addition of the UID. Python sets implicitly absorb duplicates.
         if sni in DOH_SNIS:
-            # BUGFIX: same UID-set dedup as the conn.log IP match above — a
-            # connection to a DoH IP with a DoH SNI is one event, not two.
+            LOGGER.debug("DoH bypass SNI detected: %s", sni)
             uid = ev.get("uid") or f"no-uid-{ev.get('ts', time.time())}"
             self._doh_bypass_uids[src].add(uid)
 
     def _process_http(self, src: str, ev: dict) -> None:
         ua = ev.get("user_agent", "")
         if ua: self._http_uas[src].add(ua)
-        
         host = ev.get("host", "")
         uri = ev.get("uri", "")
         if host and uri:
@@ -291,7 +271,7 @@ class ZeekFeatureExtractor:
 
     def _process_notice(self, src: str, ev: dict) -> None:
         note = ev.get("note", "")
-        msg  = ev.get("msg", "")
+        msg = ev.get("msg", "")
         if note or msg:
             self._notices[src].append({"note": note, "msg": msg, "ts": ev.get("ts")})
 
@@ -302,17 +282,16 @@ class ZeekFeatureExtractor:
 
     def get_features(self, device_ip: str) -> dict:
         return {
-            "zeek_conn_count":      self._conn_counts.get(device_ip, 0),
-            "zeek_new_ips":         len(self._new_ips.get(device_ip, set())),
-            "zeek_ja3_malicious":   len(self._ja3_hits.get(device_ip, [])),
-            "zeek_notices":         len(self._notices.get(device_ip, [])),
-            "zeek_susp_ports":      self._susp_ports.get(device_ip, 0),
-            "zeek_http_ua_count":   len(self._http_uas.get(device_ip, set())),
-            "zeek_outbound_bytes":  self._outbound_bytes.get(device_ip, 0), 
-            # BUGFIX: count unique connection UIDs, not raw increments —
-            # see module docstring / _process_conn / _process_ssl.
-            "zeek_doh_bypass":      len(self._doh_bypass_uids.get(device_ip, set())),
-            "zeek_lateral_moves":   self._lateral_moves.get(device_ip, 0),   
+            "zeek_conn_count": self._conn_counts.get(device_ip, 0),
+            "zeek_new_ips": len(self._new_ips.get(device_ip, set())),
+            "zeek_ja3_malicious": len(self._ja3_hits.get(device_ip, [])),
+            "zeek_notices": len(self._notices.get(device_ip, [])),
+            "zeek_susp_ports": self._susp_ports.get(device_ip, 0),
+            "zeek_http_ua_count": len(self._http_uas.get(device_ip, set())),
+            "zeek_outbound_bytes": self._outbound_bytes.get(device_ip, 0), 
+            # Because _doh_bypass_uids is a set, the len() here is perfectly deduplicated
+            "zeek_doh_bypass": len(self._doh_bypass_uids.get(device_ip, set())),
+            "zeek_lateral_moves": self._lateral_moves.get(device_ip, 0),   
         }
 
     def get_dest_ips(self, device_ip: str) -> set:
@@ -323,24 +302,22 @@ class ZeekFeatureExtractor:
         for hit in self._ja3_hits.get(device_ip, []):
             alerts.append({
                 "type": "malicious_ja3",
-                "ja3":  hit["ja3"],
+                "ja3": hit["ja3"],
                 "server": hit.get("server", ""),
                 "confidence": 0.95,
             })
         for notice in self._notices.get(device_ip, []):
             alerts.append({
-                "type":    "zeek_notice",
-                "note":    notice.get("note", ""),
-                "msg":     notice.get("msg", ""),
+                "type": "zeek_notice",
+                "note": notice.get("note", ""),
+                "msg": notice.get("msg", ""),
                 "confidence": 0.75,
             })
         return alerts
 
     def reset_all(self) -> None:
         """
-        MEMORY LEAK FIX: 
-        Instantly clears ALL dictionaries. Guarantees external IPs or devices
-        bypassing DNS do not indefinitely expand the memory payload over time.
+        MEMORY LEAK FIX: Clear internal registries on each iteration window.
         """
         self._conn_counts.clear()
         self._new_ips.clear()

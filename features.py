@@ -14,18 +14,17 @@ MEMORY LEAK FIX:
     Timestamps are now natively appended in main.py, eliminating massive CPU
     and memory slot churn overhead.
 """
-
 from collections import Counter
 import math
 from utils import entropy, suspicious_dga
+import logging
 
-# Aligned completely with main.py KNOWN_BLOCKED and KNOWN_NXDOMAIN
+LOGGER = logging.getLogger("home_ids.features")
+
 BLOCKED  = frozenset({1, 4, 5, 6, 7, 8, 10})
 NXDOMAIN = frozenset({3, 12, 13})
 
-
 class FeatureExtractor:
-
     def compute(self, state, now: float, window_seconds: int) -> dict:
         rw = state.rolling
 
@@ -57,8 +56,6 @@ class FeatureExtractor:
         entropy_sum  = 0.0
         suspicious   = 0
         deep_domains = 0
-        
-        # Timing jitter metric containers initialization
         beaconing_c2_count = 0
         min_jitter_cv = 999.0
 
@@ -89,7 +86,6 @@ class FeatureExtractor:
         avg_entropy = entropy_sum / max(n_domains, 1)
 
         query_rate = n_events * 60.0 / window_seconds
-
         events_per_second = n_events / max(window_seconds, 1)
 
         vals   = rw.domains.values()
@@ -137,7 +133,6 @@ class FeatureExtractor:
             "beaconing_c2_count": beaconing_c2_count,                      
             "min_jitter_cv":      min_jitter_cv if min_jitter_cv != 999.0 else 0.0  
         }
-
 
 def _zero_features() -> dict:
     return {

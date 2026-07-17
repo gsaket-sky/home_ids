@@ -52,14 +52,8 @@ LOGGER = logging.getLogger("home_ids.ml")
 # _WARMUP must match ml_warmup_samples in config.json (both = 5000).
 _WARMUP      = 5_000
 _RETRAIN_N   = 5_000
-# FIX 5: _MAXLEN reduced 50k→20k. 20k samples covers 4 full retrain cycles
-# and keeps peak training memory at ~1.9 MB/device instead of ~4.8 MB.
-# 20k × 12 features × 8 bytes = 1.9 MB per device.
 _MAXLEN      = 20_000
-# FIX 4: _MAX_DEVICES reduced 200→50. A home network has 10-30 devices.
-# Worst case 50 devices × 1.9 MB = 95 MB, vs 200 × 4.8 MB = 960 MB.
 _MAX_DEVICES = 50
-
 
 # ── shared vectorizer ──────────────────────────────────────────────────────
 
@@ -77,23 +71,19 @@ def vectorize(features: dict) -> tuple:
     already unit-normalised (0-1) and have semantic meaning without scaling.
     """
     return (
-        # Device-relative z-scores — the primary anomaly signals
         float(features.get("query_rate_z",     0.0) or 0.0),
         float(features.get("entropy_z",        0.0) or 0.0),
         float(features.get("unique_domains_z", 0.0) or 0.0),
         float(features.get("nxdomain_z",       0.0) or 0.0),
         float(features.get("blocked_z",        0.0) or 0.0),
         float(features.get("dga_z",            0.0) or 0.0),
-        # Unit-normalised absolute ratios
         float(features.get("blocked_ratio",    0.0) or 0.0),
         float(features.get("nxdomain_ratio",   0.0) or 0.0),
         float(features.get("top_domain_ratio", 0.0) or 0.0),
         float(features.get("entropy_avg",      0.0) or 0.0),
-        # Structural signals
         float(features.get("new_domains",      0.0) or 0.0),
         float(features.get("deep_domains",     0.0) or 0.0),
     )
-
 
 # ── per-device engine ──────────────────────────────────────────────────────
 
@@ -107,10 +97,9 @@ class DeviceMLEngine:
         self.model         = None
         self._scaler       = None
         self._retrain_at   = _WARMUP
-        self._retrain_pending = False   # BUG 2: prevent double-submit
+        self._retrain_pending = False   
         self._lock         = threading.Lock()
 
-        # Load from disk — try .pkl then .tmp fallback
         for path in (self.model_path, self.model_path.with_suffix(".tmp")):
             if path.exists():
                 try:
@@ -121,27 +110,13 @@ class DeviceMLEngine:
                         self.model = loaded[0]
                     else:
                         self.model = loaded
-                    LOGGER.info("Loaded per-device model for %s from %s",
-                                device_id, path.name)
+                    LOGGER.info("Loaded per-device model for %s from %s", device_id, path.name)
                     break
                 except Exception as exc:
-                    LOGGER.warning("Could not load model for %s from %s: %s",
-                                   device_id, path.name, exc)
+                    LOGGER.warning("Could not load model for %s from %s: %s", device_id, path.name, exc)
 
     @property
     def warmed_up(self) -> bool:
-        """
-        BUG 1 fix: warmed_up = model is not None.
-
-        Previously required BOTH (model is not None) AND (n_samples >= _WARMUP).
-        After a restart the model was loaded from disk but training deque was
-        empty — so warmed_up was False and the model was never used, forcing
-        2.8 hours of re-warmup after every restart.
-
-        Now: if a model exists (either loaded or just trained), it scores.
-        The training deque fills in the background and triggers retraining
-        at _WARMUP new samples, updating the model with fresh data.
-        """
         with self._lock:
             return self.model is not None
 
@@ -157,7 +132,6 @@ class DeviceMLEngine:
             self.training.append(vector)
 
     def needs_retrain(self) -> bool:
-        """BUG 2 fix: atomic check of n_samples vs _retrain_at."""
         with self._lock:
             if self._retrain_pending:
                 return False
@@ -177,10 +151,7 @@ class DeviceMLEngine:
             self._scaler = scaler
 
     def fit_pipeline(self, current_samples: list) -> tuple:
-        """
-        Train a new IsolationForest on current_samples.
-        BUG 5 fix: snapshot model/scaler atomically then use outside lock.
-        """
+        LOGGER.debug("Starting IsolationForest pipeline fit for device %s with %d samples", self.device_id, len(current_samples))
         recent = current_samples[-30_000:]
         older  = current_samples[:20_000]
         X_raw  = np.array(older + recent + recent, dtype=np.float32)
@@ -188,7 +159,6 @@ class DeviceMLEngine:
         scaler = RobustScaler()
         X      = scaler.fit_transform(X_raw)
 
-        # BUG 5 fix: snapshot under lock, use snapshot outside
         with self._lock:
             snap_model  = self.model
             snap_scaler = self._scaler
@@ -212,6 +182,7 @@ class DeviceMLEngine:
             n_jobs=1,
         )
         model.fit(X)
+        LOGGER.debug("Completed IsolationForest pipeline fit for device %s", self.device_id)
         return model, scaler
 
     def score(self, vector: tuple) -> float:
@@ -224,12 +195,14 @@ class DeviceMLEngine:
         try:
             X_raw = np.array([vector], dtype=np.float32)
             X     = snap_scaler.transform(X_raw)
-            return max(0.0, float(-snap_model.decision_function(X)[0]))
+            score = max(0.0, float(-snap_model.decision_function(X)[0]))
+            if score > 0.05:
+                LOGGER.debug("Device %s scored ML anomaly magnitude: %f", self.device_id, score)
+            return score
         except Exception:
             return 0.0
 
     def save_async(self, executor: ThreadPoolExecutor) -> None:
-        """Save model to disk in background — atomic write via .tmp rename."""
         with self._lock:
             if self.model is None:
                 return
@@ -259,17 +232,12 @@ class DeviceMLEngine:
 
         executor.submit(_save)
 
-
 # ── global fallback engine ─────────────────────────────────────────────────
 
 class GlobalMLEngine:
     """
     Single IsolationForest trained on all devices combined.
     Used as fallback while a per-device model warms up.
-
-    BUG 3 fix: learn() now actually trains and score() now actually scores.
-    Previously both were no-ops so the ML signal was always 0.0 until
-    per-device warmup — which due to BUG 1 was also always 0.0 forever.
     """
 
     def __init__(self, model_path: Path):
@@ -292,17 +260,14 @@ class GlobalMLEngine:
                     LOGGER.info("Loaded global fallback model from %s", path.name)
                     break
                 except Exception as exc:
-                    LOGGER.warning("Could not load global model from %s: %s",
-                                   path.name, exc)
+                    LOGGER.warning("Could not load global model from %s: %s", path.name, exc)
 
     @property
     def warmed_up(self) -> bool:
-        # BUG 1 fix (same as DeviceMLEngine): loaded model = ready to score
         with self._lock:
             return self.model is not None
 
     def learn(self, vector: tuple) -> None:
-        """BUG 3 fix: actually append to training buffer."""
         if any(v != v or abs(v) == float("inf") for v in vector):
             return
         with self._lock:
@@ -323,7 +288,6 @@ class GlobalMLEngine:
             self._retrain_pending = False
 
     def fit_and_update(self) -> None:
-        """Train a new global model synchronously (called from background thread)."""
         with self._lock:
             samples     = list(self.training)
             snap_model  = self.model
@@ -332,6 +296,7 @@ class GlobalMLEngine:
         if len(samples) < 100:
             return
 
+        LOGGER.info("Initiating Global ML model fit with %d samples", len(samples))
         recent = samples[-30_000:]
         older  = samples[:20_000]
         X_raw  = np.array(older + recent + recent, dtype=np.float32)
@@ -361,7 +326,6 @@ class GlobalMLEngine:
             self.model   = model
             self._scaler = scaler
 
-        # Atomic save
         try:
             self.model_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.model_path.with_suffix(".tmp")
@@ -372,7 +336,6 @@ class GlobalMLEngine:
             LOGGER.warning("Could not save global model: %s", exc)
 
     def score(self, vector: tuple) -> float:
-        """BUG 3 fix: actually return a score when model is available."""
         with self._lock:
             if self.model is None or self._scaler is None:
                 return 0.0
@@ -385,7 +348,6 @@ class GlobalMLEngine:
             return max(0.0, float(-snap_model.decision_function(X)[0]))
         except Exception:
             return 0.0
-
 
 # ── registry ───────────────────────────────────────────────────────────────
 
@@ -405,8 +367,6 @@ class MLRegistry:
         self._devices: dict[str, DeviceMLEngine] = {}
         self._global  = GlobalMLEngine(Path(global_model_path))
         self._lock    = threading.Lock()
-        # Single-worker executor: serialises all background retrains so they
-        # never compete for CPU with the scoring loop or each other.
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="ids_ml"
         )
@@ -419,9 +379,7 @@ class MLRegistry:
                 if len(self._devices) >= _MAX_DEVICES:
                     evict = next(iter(self._devices))
                     del self._devices[evict]
-                self._devices[device_id] = DeviceMLEngine(
-                    device_id, self.model_dir
-                )
+                self._devices[device_id] = DeviceMLEngine(device_id, self.model_dir)
             return self._devices[device_id]
 
     def _bg_retrain(self, eng: DeviceMLEngine, samples: list) -> None:
@@ -429,8 +387,7 @@ class MLRegistry:
             model, scaler = eng.fit_pipeline(samples)
             eng.update_model(model, scaler)
             eng.save_async(self._executor)
-            LOGGER.info("Retrained per-device model for %s (%d samples)",
-                        eng.device_id, len(samples))
+            LOGGER.info("Retrained per-device model for %s (%d samples)", eng.device_id, len(samples))
         except Exception as exc:
             LOGGER.error("Retrain failed for %s: %s", eng.device_id, exc)
         finally:
@@ -449,14 +406,12 @@ class MLRegistry:
     def learn(self, device_id: str, features: dict) -> None:
         vec = vectorize(features)
 
-        # Per-device
         eng = self._get(device_id)
         eng.learn(vec)
         if eng.needs_retrain():
             samples = list(eng.training)
             self._executor.submit(self._bg_retrain, eng, samples)
 
-        # Global fallback
         self._global.learn(vec)
         if self._global.needs_retrain():
             self._executor.submit(self._bg_global_retrain)
@@ -464,10 +419,8 @@ class MLRegistry:
     def score(self, device_id: str, features: dict) -> float:
         vec = vectorize(features)
         eng = self._get(device_id)
-        # BUG 1 fix: per-device scores immediately if model exists on disk
         if eng.warmed_up:
             return eng.score(vec)
-        # Fallback to global (also scores immediately if model loaded from disk)
         return self._global.score(vec)
 
     def device_status(self, device_id: str) -> dict:

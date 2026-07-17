@@ -1,95 +1,117 @@
 """
-config.py – Configuration loading with hot-reload support and Environment Variable injections.
-
-Changelog
-─────────────────────────────────────────────────────────────────────
-v1  Original: DEFAULT_CONFIG missing keys, no error handling.
-v2  All keys added with defaults, try/except on JSON parse.
-v3  New keys: zeek_log_dir, otx_api_key, ti_refresh_interval,
-    safe_ips, device_type_overrides.
-v4  Hot-reload: ConfigWatcher background thread polls config.json.
-v5  Environment Variable Hardening (Current Version):
-    • Intercepts configuration assembly to pull system environment variables
-      (IDS_TELEGRAM_TOKEN, IDS_TELEGRAM_CHAT_ID, IDS_OTX_API_KEY).
-    • Sanitizes and injects environment configurations transparently across workers.
-    • IDS_ABUSEIPDB_KEY and IDS_VIRUSTOTAL_KEY for optional enrichment feeds.
-
-Codex changelog 2026-06-18:
-  - Added alert_json_path and alert_json_max_bytes defaults for capped alert file logging.
-  - Added safe_host_patterns defaults for Pi-hole hostname exclusion.
-  - safe_ips remains the direct IP allowlist for DNS servers and other infrastructure.
-
-Bugfix changelog (this version):
-  - Added `home_subnet` (CIDR) so zeek_collector.py's lateral-movement / internal
-    traffic detection no longer hardcodes "192.168.178.0/24". Previously this was
-    a bare module constant in zeek_collector.py; on any network that isn't a
-    Fritz!Box default LAN, lateral-movement detection silently never fired and
-    all normal internal traffic was miscounted as "new external IPs".
-  - Added `geoip_asn_db` (optional path to a GeoLite2-ASN.mmdb) so geoip_engine.py
-    can populate real ASN/org values. Previously ASN/org were hardcoded to
-    "unknown" for every lookup, which meant every ASN-keyed metric
-    (asn_risk_metric, geo_hits_metric, etc.) was permanently a single dead
-    "unknown" bucket. Leave empty to keep the previous (ASN-less) behavior.
+config.py – Configuration management.
 """
-
 import json
-import logging
 import os
 import threading
 import time
+import logging
 from pathlib import Path
 
 LOGGER = logging.getLogger("home_ids.config")
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
+# Fully Restored Default Configuration Dictionary
 DEFAULT_CONFIG = {
-    "poll_interval": 2,
+    # Core Engine Timings & Limits
+    "poll_interval": 2.0,
     "window_seconds": 300,
     "startup_lookback_seconds": 300,
+    "max_device_states": 5000,
+    "log_level": "INFO",
+
+    # Threat Scoring & ML Engine
     "alert_threshold": 6.0,
     "threshold_std_dev": 3.0,
-    "per_device_thresholds": {},
-    "ml_warmup_samples": 5000,
     "baseline_alpha": 0.05,
-    "decay_factor": 0.995,
+    "ml_warmup_samples": 5000,
+    
+    # State & Model Persistence
     "state_path": "state/ids_state.json",
-    "model_path": "models/ids_model.pkl",
-    "max_device_states": 5000,
-    "geoip_db": "../geoiop/GeoLite2-City.mmdb",
-    # NEW: Optional GeoLite2-ASN.mmdb path. When empty, ASN/org fields stay
-    # "unknown" (previous behavior) instead of silently pretending to be looked up.
-    "geoip_asn_db": "",
-    # NEW: CIDR of the home LAN, used by zeek_collector.py to distinguish
-    # internal-to-internal traffic (lateral movement candidates) from traffic
-    # leaving the network. Was previously a hardcoded "192.168.178." prefix.
-    "home_subnet": "192.168.178.0/24",
-    "telegram_enabled": True,
-    "telegram_token": "",
-    "telegram_chat_id": "",
-    "metrics_port": 9105,
-    "log_level": "INFO",
+    "model_path": "state/ids_model.pkl",
+    "alert_json_path": "alerts.json",
+    "alert_json_max_bytes": 1073741824,
+
+    # Network Environment & Integration
+    "pihole_db": "/etc/pihole/pihole-FTL.db",
     "zeek_log_dir": "/opt/zeek/logs/current",
+    "home_subnet": "192.168.178.0/24",
+    "metrics_port": 9105,
+
+    # Geographic Intelligence
+    "geoip_db": "GeoLite2-City.mmdb",
+    "geoip_asn_db": "", 
+
+    # Threat Intelligence Feeds
+    "ti_refresh_interval": 3600,
     "otx_api_key": "",
     "abuseipdb_api_key": "",
     "virustotal_api_key": "",
-    "ti_refresh_interval": 3600,
+
+    # Alert Delivery
+    "telegram_enabled": False,
+    "telegram_token": "",
+    "telegram_chat_id": "",
+
+    # Safelists & Overrides
     "safe_ips": ["127.0.0.1"],
-    "safe_host_patterns": ["pihole", "pi-hole", "pi_hole", "pi.hole"],
+    "safe_host_patterns": [],
     "device_type_overrides": {},
-    "alert_json_path": "alerts.json",
-    "alert_json_max_bytes": 1073741824,
+    "per_device_thresholds": {}
 }
 
-
 class LiveConfig:
-    def __init__(self, initial_config: dict):
-        self._config = initial_config
+    def __init__(self, default_config: dict, file_path: Path):
+        self.file_path = file_path
+        self._config = dict(default_config)
         self._lock = threading.Lock()
-        self._mtime = 0
         self._notify_cb = None
+        self._last_loaded = 0.0
+        self._load()
 
-        if CONFIG_FILE.exists():
-            self._mtime = CONFIG_FILE.stat().st_mtime
+    def _load(self) -> None:
+        if not self.file_path.exists():
+            try:
+                self.file_path.write_text(json.dumps(self._config, indent=2))
+                LOGGER.info("Created default configuration file at %s", self.file_path)
+            except Exception as exc:
+                LOGGER.error("Failed to create default config: %s", exc)
+            return
+
+        try:
+            raw = json.loads(self.file_path.read_text())
+            changed = {}
+            with self._lock:
+                for k, v in raw.items():
+                    if k in self._config and self._config[k] != v:
+                        changed[k] = v
+                    self._config[k] = v
+            
+            self._last_loaded = time.time()
+            if changed:
+                LOGGER.info("Dynamic configuration reload detected changes: %s", list(changed.keys()))
+                if self._notify_cb:
+                    self._notify_cb(changed)
+        except Exception as exc:
+            LOGGER.error("Failed to parse configuration file %s: %s", self.file_path, exc)
+
+    def start_watcher(self, interval: float = 5.0) -> None:
+        def _watch():
+            while True:
+                time.sleep(interval)
+                try:
+                    mtime = self.file_path.stat().st_mtime
+                    if mtime > self._last_loaded:
+                        LOGGER.debug("Configuration file modification detected, triggering reload.")
+                        self._load()
+                except Exception:
+                    pass
+        t = threading.Thread(target=_watch, daemon=True, name="config-watcher")
+        t.start()
+        LOGGER.info("Configuration live-watcher started (interval=%.1fs)", interval)
+
+    def set_notify(self, cb) -> None:
+        self._notify_cb = cb
 
     def get(self, key: str, default=None):
         with self._lock:
@@ -99,84 +121,4 @@ class LiveConfig:
         with self._lock:
             return self._config[key]
 
-    def set_notify(self, callback) -> None:
-        self._notify_cb = callback
-
-    def reload(self) -> None:
-        """Reloads config from JSON while maintaining environment variable overrides."""
-        try:
-            new_raw = _build_initial()
-            changed = {}
-
-            with self._lock:
-                # Identify actual mutations for the logging/notification matrix
-                for k, v in new_raw.items():
-                    if k in self._config and self._config[k] != v:
-                        changed[k] = v
-                self._config = new_raw
-
-            if changed and self._notify_cb:
-                LOGGER.info("Configuration change detected dynamically: %s", changed)
-                self._notify_cb(changed)
-
-        except Exception:
-            LOGGER.exception("Failed executing runtime hot-reload configuration pass")
-
-
-    def start_watcher(self, interval: float = 5.0) -> None:
-        t = threading.Thread(
-            target=self._watcher_loop,
-            args=(interval,),
-            daemon=True,
-            name="config-watcher",
-        )
-        t.start()
-        LOGGER.info("Config watcher started (polling every %.0fs)", interval)
-
-    def _watcher_loop(self, interval: float) -> None:
-        while True:
-            try:
-                if CONFIG_FILE.exists():
-                    mtime = CONFIG_FILE.stat().st_mtime
-                    if mtime != self._mtime:
-                        self._mtime = mtime
-                        time.sleep(0.2)  # Short pause to prevent partial reads
-                        self.reload()
-            except Exception:
-                LOGGER.exception("Config watcher tracking thread error")
-            time.sleep(interval)
-
-
-def _build_initial() -> dict:
-    """Combines defaults, configuration JSON files, and active system environment values."""
-    cfg = DEFAULT_CONFIG.copy()
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text())
-            cfg.update(data)
-        except Exception as e:
-            print(f"[config] WARNING: could not parse config.json: {e} — using fallback stack")
-
-    # Intercept configurations and overlay active environment variables
-    env_token = os.environ.get("IDS_TELEGRAM_TOKEN")
-    env_chat  = os.environ.get("IDS_TELEGRAM_CHAT_ID")
-    env_otx   = os.environ.get("IDS_OTX_API_KEY")
-    env_abuse = os.environ.get("IDS_ABUSEIPDB_KEY")
-    env_vt    = os.environ.get("IDS_VIRUSTOTAL_KEY")
-
-    if env_token:
-        cfg["telegram_token"] = env_token.strip()
-    if env_chat:
-        cfg["telegram_chat_id"] = env_chat.strip()
-    if env_otx:
-        cfg["otx_api_key"] = env_otx.strip()
-    if env_abuse:
-        cfg["abuseipdb_api_key"] = env_abuse.strip()
-    if env_vt:
-        cfg["virustotal_api_key"] = env_vt.strip()
-
-    return cfg
-
-
-# Live configuration manager reference engine
-CONFIG = LiveConfig(_build_initial())
+CONFIG = LiveConfig(DEFAULT_CONFIG, CONFIG_FILE)

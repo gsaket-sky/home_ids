@@ -22,6 +22,10 @@ Codex changelog:
   - NEW: Instrumenting direct DoH bypass, lateral private scanning pivots, jitter clocks, and data exfiltration byte deviations.
   - PERFORMANCE V3: Asynchronous Background DNS threading eliminates OS socket timeouts. 
     Prometheus and Threat Intel checks are globally aggregated to destroy CPU loop churn.
+  - BUGFIX: VirusTotal malicious hits now accurately increment the Prometheus `ti_ioc_hits_total` counter.
+  - BUGFIX: AbuseIPDB and VirusTotal risk severity scores are now actively exported as explicit gauges.
+  - BUGFIX: Added probation_status_metric to expose cold-start engine protections to Grafana.
+  - BUGFIX: Added zeek_status_metric and zeek_events_processed_metric to verify Zeek log bindings.
 """
 
 import argparse
@@ -57,7 +61,7 @@ from utils import (
     resolve_domain,
     infer_device_type,
     suspicious_dga,
-    entropy as _ent_fn  # Pulled global import out of loop to save IO cycles
+    entropy as _ent_fn  
 )
 
 from metrics import (
@@ -69,16 +73,18 @@ from metrics import (
     zscore_dga_metric, risk_velocity_metric, zeek_conn_count_metric,
     zeek_new_ips_metric, zeek_ja3_metric, zeek_notices_metric,
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
-    ti_ioc_hits_total, safe_device_metric, geo_risk_metric, geo_hits_metric,
+    ti_ioc_hits_total, safe_device_metric, probation_status_metric, 
+    geo_risk_metric, geo_hits_metric,
     geo_beacon_metric, asn_risk_metric, country_density_metric,
     geo_traffic_total, geo_queries_per_minute, geo_unique_domains,
     geo_entropy, geo_device_count, collector_lag_metric, alert_queue_metric,
     ml_model_loaded_metric, events_processed_metric, alerts_total,
-    query_rate_baseline_mean_metric,
-    query_rate_threshold_limit_metric,
-    # NEW NDR METRICS
+    query_rate_baseline_mean_metric, query_rate_threshold_limit_metric,
     ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
-    ndr_jitter_c2_metric, ndr_exfil_z_metric
+    ndr_jitter_c2_metric, ndr_exfil_z_metric,
+    abuseipdb_risk_metric, virustotal_risk_metric,   
+    beaconing_volume_metric, jitter_cv_metric,
+    zeek_status_metric, zeek_events_processed_metric   
 )
 
 RUNNING         = True
@@ -92,11 +98,6 @@ MAX_STATES        = int(CONFIG.get("max_device_states", 5000))
 KNOWN_BLOCKED     = frozenset({1, 4, 5, 6, 7, 8, 10})
 KNOWN_NXDOMAIN    = frozenset({3, 12, 13})
 
-# =============================================================================
-# GLOBAL REGISTRY FOR PEER CLUSTERING
-# Maintain group baseline fallback values categorized strictly by time block.
-# Structure: device_type -> feature_name -> time_idx (0=Day, 1=Night) -> {"mean", "var"}
-# =============================================================================
 PEER_CLUSTER_REGISTRY = {}
 
 def print_ids_documentation():
@@ -143,11 +144,7 @@ def print_ids_documentation():
     print("      - Concept    : Isolation Forest detected structural shifting inside multi-feature data matrix.")
     print("=" * 80)
 
-# =============================================================================
-# DETECTOR ENGINE DUCK-TYPING PROPERTY COUPLING PIPELINE
-# =============================================================================
 def _baseline_zscore_patch(self, val: float) -> float:
-    """Dynamically attached calculation for internal scoring.py calls (legacy fallback)."""
     if not getattr(self, "initialized", False) or getattr(self, "n", 0) < 30:
         return 0.0
     variance = getattr(self, "var", 1.0)
@@ -163,33 +160,16 @@ try:
 except Exception as patch_exc:
     LOGGER.warning("Could not execute structural baseline property bindings: %s", patch_exc)
 
-def calculate_zscore(val: float, baseline, cap=8.0) -> float:
-    """Safely calculates the Z-Score using a legacy flat baseline."""
-    if not getattr(baseline, 'initialized', False) or getattr(baseline, 'n', 0) < 100:
-        return 0.0
-    std_dev = math.sqrt(max(getattr(baseline, 'var', 1.0), 1.0))
-    z = (val - getattr(baseline, 'mean', 0.0)) / std_dev
-    return max(-cap, min(cap, z))
-
 def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
-    """
-    Extracts diurnal stats based on the hour.
-    Splits the network timeline into 3 distinct operational profiles:
-      0 = Day Window (06:00 - 22:00) -> Active user browsing
-      1 = Night/Evening (22:00 - 01:00 & 05:00 - 06:00) -> Winding down / low idle
-      2 = Maintenance Window (01:00 - 05:00) -> Heavy smartphone cloud backups & telemetry
-    """
     mean, var, initialized, n = baseline.get_stats(hour)
     
-    # CRITICAL FIX: Isolate the deep-night backup window
     if 6 <= hour < 22:
-        time_idx = 0  # Day
+        time_idx = 0  
     elif 1 <= hour < 5:
-        time_idx = 2  # Maintenance (Telemetry dumps)
+        time_idx = 2  
     else:
-        time_idx = 1  # Winding down / Early Morning
+        time_idx = 1  
     
-    # If this specific device baseline is warm for this hour, use it directly
     if initialized and n >= 100:
         dev_cluster = PEER_CLUSTER_REGISTRY.setdefault(dev_type, {})
         feat_cluster = dev_cluster.setdefault(feature_name, {})
@@ -198,7 +178,6 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
         std_dev = math.sqrt(max(var, 1.0))
         return max(-8.0, min(8.0, (val - mean) / std_dev))
     
-    # Cold start fallback: check peer cluster templates for THIS specific time profile
     peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name, {}).get(time_idx)
     if peer_template:
         p_mean = peer_template["mean"]
@@ -207,10 +186,6 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
     
     return 0.0
 
-# =============================================================================
-# ASYNCHRONOUS DNS RESOLUTION & CACHING ENGINE
-# Eliminates thread-blocking OS lockouts on DGA bursts or unknown routing domains
-# =============================================================================
 _GEO_CACHE = OrderedDict()
 _GEO_CACHE_MAX = 15000  
 _GEO_CACHE_TTL = 3600   
@@ -218,7 +193,6 @@ _CACHE_LOCK = threading.Lock()
 _DNS_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=20, thread_name_prefix="ids_dns")
 
 def _bg_resolve(domain: str, geoip_engine: GeoIPEngine):
-    """Background worker resolving DNS without halting the main pipeline."""
     try:
         ip = resolve_domain(domain)
         geo = _geo_from_ip(geoip_engine, ip)
@@ -230,7 +204,6 @@ def _bg_resolve(domain: str, geoip_engine: GeoIPEngine):
         _GEO_CACHE[domain] = (ip, geo, time.time() + _GEO_CACHE_TTL)
 
 def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> tuple:
-    """O(1) cache read. Never blocks. Defers misses to the thread pool."""
     now = time.time()
     with _CACHE_LOCK:
         cached = _GEO_CACHE.get(domain)
@@ -240,15 +213,12 @@ def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> tuple:
                 _GEO_CACHE.move_to_end(domain)
                 return _ip, geo
 
-        # IMMEDIATELY cache an "unknown" entry with a 30-second TTL to prevent 
-        # spawning hundreds of redundant threads for the exact same domain burst.
         _GEO_CACHE[domain] = (None, _unknown_geo(), now + 30)
         _GEO_CACHE.move_to_end(domain)
         
         if len(_GEO_CACHE) > _GEO_CACHE_MAX:
             _GEO_CACHE.popitem(last=False)
             
-    # Spawn the resolution in the background. Main thread never waits.
     _DNS_POOL.submit(_bg_resolve, domain, geoip_engine)
     
     return None, _unknown_geo()
@@ -274,7 +244,6 @@ def _unknown_geo() -> dict:
         "country": "unknown", "city": "unknown", "continent": "unknown",
         "latitude": "0", "longitude": "0", "asn": "unknown", "org": "unknown",
     }
-# =============================================================================
 
 def load_states(path: str, alpha: float) -> "OrderedDict":
     p = Path(path)
@@ -349,23 +318,16 @@ _DEVICE_GAUGES = (
     zscore_dga_metric, risk_velocity_metric, zeek_conn_count_metric,
     zeek_new_ips_metric, zeek_ja3_metric, zeek_notices_metric,
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
-    safe_device_metric, query_rate_baseline_mean_metric,
+    safe_device_metric, probation_status_metric, query_rate_baseline_mean_metric,
     query_rate_threshold_limit_metric,
     ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
-    ndr_jitter_c2_metric, ndr_exfil_z_metric
+    ndr_jitter_c2_metric, ndr_exfil_z_metric,
+    abuseipdb_risk_metric, virustotal_risk_metric,   
+    beaconing_volume_metric, jitter_cv_metric        
 )
 
-def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str,
-                                  keep_safe_flag: bool = False) -> None:
-    """
-    Removes all per-device Prometheus gauge labels for a device.
-
-    keep_safe_flag: BUGFIX addition — when True (device is being dropped
-    because it's on the safe list, not because it went stale/renamed), skip
-    removing safe_device_metric so the 1.0 value set by the caller survives
-    and dashboards can still see "this device is safe-listed" instead of the
-    label vanishing along with every other metric.
-    """
+def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str, keep_safe_flag: bool = False) -> None:
+    """Removes all per-device Prometheus gauge labels for a device."""
     if not dev_id or not hostname or not device_type:
         return
     for metric in _DEVICE_GAUGES:
@@ -379,7 +341,6 @@ def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str,
             LOGGER.debug("Could not remove stale metric labels for %s/%s", dev_id, hostname)
 
 def safe_ti_check(ti_obj, domain: str) -> bool:
-    """Return True if domain matches any loaded threat-intel feed."""
     try:
         if hasattr(ti_obj, "lookup_domain"):
             return ti_obj.lookup_domain(domain) is not None
@@ -404,7 +365,6 @@ def _apply_device_type(st, dev_id: str, overrides: dict) -> None:
 _MAX_SEEN_DOMAINS = 5_000   
 
 def _vt_should_enqueue(domain: str, feats: dict) -> bool:
-    """Pre-filter domains worth a VirusTotal lookup (rate-limited API)."""
     if suspicious_dga(domain):
         return True
     if feats.get("nxdomain_ratio", 0.0) > 0.3:
@@ -421,12 +381,8 @@ def _evaluate_intel(
     vt: VirusTotalClient | None,
     zeek_dest_ips: set,
     zeek_http_reqs: set,
-    global_ti_cache: dict  # Pre-computed map to avoid internal mutex contention
+    global_ti_cache: dict  
 ) -> tuple[float, float, float, int, list]:
-    """
-    Evaluate all IOC feeds for a device window.
-    Returns (ti_risk, abuseipdb_risk, vt_risk, any_match_flag, matches).
-    """
     ti_risk = 0.0
     abuse_risk = 0.0
     vt_risk = 0.0
@@ -505,9 +461,9 @@ def _evaluate_intel(
                     "device_ip": st.client_ip or "unknown",
                     "risk": ip_vt_risk,
                 })
+                ti_ioc_hits_total.labels(source="virustotal", ioc_type="ip").inc()
 
     for domain_entry in st.rolling.domains.keys():
-        # Tap into the globally pre-computed cache to skip redundant checks
         entry = global_ti_cache.get(domain_entry)
         if not entry: continue
         
@@ -549,6 +505,7 @@ def _evaluate_intel(
                     "device_ip": st.client_ip or "unknown",
                     "risk": domain_vt_risk,
                 })
+                ti_ioc_hits_total.labels(source="virustotal", ioc_type="domain").inc()
 
         _check_ip(entry["ip"], entry["ip_ti"], entry["ip_score"])
 
@@ -629,10 +586,6 @@ def main():
         model_dir         = Path(CONFIG["model_path"]).parent / "devices",
         global_model_path = Path(CONFIG["model_path"]),
     )
-    # BUGFIX: geoip_engine.py previously hardcoded asn/org to "unknown" with
-    # no way to change that. Now pass the optional ASN database path through;
-    # if it's empty/unset, behavior is identical to before (asn/org stay
-    # "unknown").
     geoip_engine = GeoIPEngine(CONFIG["geoip_db"], asn_db_path=CONFIG.get("geoip_asn_db", ""))
     
     tg_token = CONFIG.get("telegram_token", "")
@@ -645,10 +598,6 @@ def main():
         enabled = _tg_enabled,
     )
     alert_log = AlertJSONWriter(
-        # BUGFIX: fallback here was "alerts.jsonl" but config.py's actual
-        # DEFAULT_CONFIG (and config.json) both use "alerts.json" — the two
-        # defaults had drifted apart. Harmless while config.json always sets
-        # the key, but wrong if it's ever removed. Aligned to "alerts.json".
         path=CONFIG.get("alert_json_path", "alerts.json"),
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
@@ -689,9 +638,6 @@ def main():
         log_dir       = CONFIG.get("zeek_log_dir", "/opt/zeek/logs/current"),
         poll_interval = float(CONFIG["poll_interval"]),
     )
-    # BUGFIX: home_subnet was previously a hardcoded "192.168.178." constant
-    # inside zeek_collector.py. Now sourced from config.json so lateral-movement
-    # detection works on networks other than a Fritz!Box default LAN.
     zeek_fx = ZeekFeatureExtractor(home_subnet=CONFIG.get("home_subnet", "192.168.178.0/24"))
     start_http_server(int(CONFIG.get("metrics_port", 9105)))
 
@@ -728,13 +674,45 @@ def main():
         try:
             rows = collector.poll()
             zeek_events = list(zeek.poll())
+            
+            # EXPOSE ZEEK HEALTH TO PROMETHEUS
+            zeek_status_metric.set(1.0 if zeek.available else 0.0)
+            zeek_events_processed_metric.inc(len(zeek_events))
+            
+            current_cycle_ip_counts = Counter()
+            current_cycle_ip_devices = defaultdict(set)
+
             for zeek_event in zeek_events:
                 zeek_fx.ingest(zeek_event)
+                
+                if zeek_event.get("_zeek_type") == "conn":
+                    dst_ip = zeek_event.get("id.resp_h", zeek_event.get("resp_h", ""))
+                    src_ip = zeek_event.get("id.orig_h", zeek_event.get("orig_h", ""))
+                    if dst_ip and not zeek_fx._is_home_ip(dst_ip):
+                        current_cycle_ip_counts[dst_ip] += 1
+                        dev_id = stable_device_id(src_ip)
+                        current_cycle_ip_devices[dst_ip].add(dev_id)
+                        
+                        geo_info = geoip_engine.geo_labels(dst_ip)
+                        c_code = geo_info.get("country", "unknown")
+                        c_asn = geo_info.get("asn", "unknown")
+                        
+                        geo_traffic_total.labels(
+                            str(c_code), str(geo_info.get("city", "unknown")), str(geo_info.get("continent", "unknown")),
+                            str(c_asn), str(geo_info.get("org", "unknown")), 
+                            str(geo_info.get("latitude", "0")), str(geo_info.get("longitude", "0"))
+                        ).inc(1)
+                        
+                        if c_code in ["RU", "CN", "IR", "KP"]:
+                            geo_hits_metric.labels(str(c_code), str(c_asn)).inc(1)
 
             now        = loop_start
             batch_size = len(rows)
             total_events_processed += batch_size
             events_processed_metric.inc(batch_size)
+            
+            if batch_size > 0:
+                LOGGER.debug("Processing batch of %d events from collector.", batch_size)
 
             if rows:
                 collector_lag_metric.set(max(0.0, now - rows[-1]["timestamp"]))
@@ -768,37 +746,18 @@ def main():
 
                         st.rolling.events.append((now, domain, status))
                         st.rolling.domains[domain] += 1
-                        
-                        # Jitter timestamp safely appended precisely ONCE at initial ingestion.
                         st.rolling.domain_timestamps[domain].append(now)
 
                         if status in KNOWN_BLOCKED:
                             st.rolling.blocked += 1
                         if status in KNOWN_NXDOMAIN:
                             st.rolling.nxdomain += 1
-                            
-                        # INGESTION PHASE: Increment Traffic Geography Exact 1x Per Packet
-                        _, geo_info = _geo_lookup_cached(geoip_engine, domain)
-                        c_code = geo_info.get("country", "unknown")
-                        c_asn = geo_info.get("asn", "unknown")
-                        
-                        geo_traffic_total.labels(
-                            str(c_code), str(geo_info.get("city", "unknown")), str(geo_info.get("continent", "unknown")),
-                            str(c_asn), str(geo_info.get("org", "unknown")), 
-                            str(geo_info.get("latitude", "0")), str(geo_info.get("longitude", "0"))
-                        ).inc(1)
-                        
-                        if c_code in ["RU", "CN", "IR", "KP"]:
-                            geo_hits_metric.labels(str(c_code), str(c_asn)).inc(1)
             else:
                 collector_lag_metric.set(0.0)
 
             with STATE_LOCK:
                 active_devices = list(states.items())
 
-            # =========================================================================
-            # GLOBAL AGGREGATION PHASE: Slashes Mutex and Prometheus Label Loops
-            # =========================================================================
             global_domain_counts = Counter()
             global_device_tracking = defaultdict(set)
             
@@ -807,10 +766,11 @@ def main():
                     global_domain_counts[d] += c
                     global_device_tracking[d].add(dev_id)
 
-            # 1. Build Pre-Computed Threat Intel Map (O(Unique Domains) instead of O(Devices x Domains))
             global_ti_cache = {}
             for domain in global_domain_counts.keys():
-                resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain)
+                resolved_ip = zeek_fx.get_wire_ip(domain)
+                if not resolved_ip:
+                    resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain)
                 resolved_ip = resolved_ip or "unknown"
                 domain_ti = ti.lookup_domain(domain)
                 ip_ti = ti.lookup_ip(resolved_ip)
@@ -823,10 +783,9 @@ def main():
                     "ip_score": ti.ioc_risk_score(ip=resolved_ip) if ip_ti else 0.0,
                 }
 
-            # 2. Build High-Cardinality Geo Groupings
             unique_geos = {}
-            for domain, d_count in global_domain_counts.items():
-                _, geo_info = _geo_lookup_cached(geoip_engine, domain)
+            for ip, ip_count in current_cycle_ip_counts.items():
+                geo_info = geoip_engine.geo_labels(ip)
                 dim_qpm = (
                     str(geo_info.get("country", "unknown")),
                     str(geo_info.get("city", "unknown")),
@@ -837,37 +796,24 @@ def main():
                     str(geo_info.get("longitude", "0"))
                 )
                 if dim_qpm not in unique_geos:
-                    unique_geos[dim_qpm] = {"count": 0, "domains": set(), "devices": set()}
-                unique_geos[dim_qpm]["count"] += d_count
-                unique_geos[dim_qpm]["domains"].add(domain)
-                unique_geos[dim_qpm]["devices"].update(global_device_tracking[domain])
+                    unique_geos[dim_qpm] = {"count": 0, "ips": set(), "devices": set()}
+                unique_geos[dim_qpm]["count"] += ip_count
+                unique_geos[dim_qpm]["ips"].add(ip)
+                unique_geos[dim_qpm]["devices"].update(current_cycle_ip_devices[ip])
 
             for dev_id, st in active_devices:
                 if _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns):
-                    # BUGFIX: previously safe-listed devices were dropped here
-                    # via _remove_device_metric_labels() (which also wiped
-                    # safe_device_metric), and safe_device_metric was instead
-                    # set later using "risk_score < 4.0" for ordinary
-                    # devices — meaning the metric's documented meaning
-                    # ("Device is on the safe list") never actually matched
-                    # what it recorded: real safe-listed devices never got
-                    # value 1, and non-safe devices got a risk threshold flag
-                    # mislabeled as "safe list" membership.
-                    # Fix: explicitly record 1.0 for genuinely safe-listed
-                    # devices before their other per-device metrics are torn
-                    # down, then always keep this one gauge alive so
-                    # dashboards can see it.
                     safe_device_metric.labels(
                         str(dev_id), str(st.hostname), str(st.device_type)
                     ).set(1.0)
                     _remove_device_metric_labels(
                         dev_id, st.hostname, st.device_type, keep_safe_flag=True
                     )
+                    LOGGER.debug("Device %s (%s) safe-listed, skipping risk scoring.", dev_id, st.hostname)
                     with STATE_LOCK:
                         states.pop(dev_id, None)
                     continue
 
-                # Set diurnal clock bounds
                 current_hour = time.localtime(now).tm_hour
 
                 with STATE_LOCK:
@@ -876,32 +822,18 @@ def main():
                 if feats["total"] == 0:
                     continue
 
-                # Inject diurnal context for scoring pipeline
                 feats["current_hour"] = current_hour
 
-                # --- STATEFUL ENRICHMENT DETECTOR ---
                 if st.rolling.domains:
                     top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None)
                 else:
                     top_domain = None
                 feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
 
-                # BUGFIX (critical): zeek_feats — which contains
-                # zeek_outbound_bytes — must be merged into `feats` BEFORE the
-                # z-score block below runs. This used to happen AFTER the
-                # z-score block, so `feats.get("zeek_outbound_bytes", 0.0)`
-                # always silently fell back to 0.0 and outbound_bytes_z was
-                # permanently computed as "0 bytes vs baseline" — meaning the
-                # "Exfiltration Payload Burst" scoring factor and the
-                # home_ids_outbound_bytes_zscore metric could never fire,
-                # no matter how much data actually left the device. The
-                # baseline itself (st.outbound_bytes_baseline.update(...) further
-                # below) was unaffected since it already ran after this merge.
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
                 zeek_alerts = zeek_fx.get_alerts(st.client_ip)
                 feats.update(zeek_feats)
 
-                # Bind time-aware clustered Z-scores using adaptive peer groupings
                 feats["query_rate_z"]         = calculate_adaptive_zscore(feats["query_rate"], st.rate_baseline, "rate", st.device_type, current_hour)
                 feats["entropy_avg_z"]        = calculate_adaptive_zscore(feats["entropy_avg"], st.entropy_baseline, "entropy", st.device_type, current_hour)
                 feats["entropy_z"]            = feats["entropy_avg_z"]
@@ -910,16 +842,12 @@ def main():
                 feats["nxdomain_ratio_z"]     = calculate_adaptive_zscore(feats["nxdomain_ratio"], st.nxdomain_baseline, "nxdomain", st.device_type, current_hour)
                 feats["blocked_ratio_z"]      = calculate_adaptive_zscore(feats["blocked_ratio"], st.blocked_baseline, "blocked", st.device_type, current_hour)
                 feats["suspicious_domains_z"] = calculate_adaptive_zscore(feats["suspicious_domains"], st.dga_baseline, "dga", st.device_type, current_hour)
-                # This now correctly reads the real zeek_outbound_bytes value
-                # merged in above, instead of always defaulting to 0.0.
                 feats["outbound_bytes_z"]     = calculate_adaptive_zscore(feats.get("zeek_outbound_bytes", 0.0), st.outbound_bytes_baseline, "outbound_bytes", st.device_type, current_hour)
 
-                # --- ML ENGINE COMPATIBILITY MAPPING FIX ---
                 feats["nxdomain_z"] = feats["nxdomain_ratio_z"]
                 feats["blocked_z"]  = feats["blocked_ratio_z"]
                 feats["dga_z"]      = feats["suspicious_domains_z"]
 
-                # --- Dynamic Threshold Calculation with diurnal hour stats ---
                 std_dev_multiplier = float(CONFIG.get("threshold_std_dev", 3.0))
                 device_overrides = CONFIG.get("per_device_thresholds", {})
                 device_multiplier = device_overrides.get(st.client_ip, std_dev_multiplier)
@@ -941,12 +869,10 @@ def main():
 
                 ml_score = ml.score(dev_id, feats)
 
-                # Fetch risk details early BEFORE baseline updates to guard against Day-Zero poisoning
                 with STATE_LOCK:
                     risk_details = scorer.explain(feats, st, ml_score, zeek_alerts=zeek_alerts)
                     risk_score   = risk_details["risk"]
 
-                # --- ANTI-POISONING INTEL FILTER ---
                 is_poisoned = (
                     risk_score >= 7.0 or 
                     ti_match == 1 or 
@@ -980,7 +906,6 @@ def main():
                     while len(st.seen_domains) > _MAX_SEEN_DOMAINS:
                         del st.seen_domains[next(iter(st.seen_domains))]
 
-                # Risk velocity tracking (Must pull proper diurnal tracking stat)
                 rmean, rvar, rinit, rn = st.risk_baseline.get_stats(current_hour)
                 if rinit and rn >= 100:
                     _rstd = math.sqrt(max(rvar, 1.0))
@@ -1000,21 +925,19 @@ def main():
                 ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
                 ndr_exfil_z_metric.labels(str_dev_id, str_host, str_type).set(feats.get("outbound_bytes_z", 0.0))
 
-                # BUGFIX: geo_beacon_metric (home_ids_geo_beaconing_total) was
-                # imported at the top of this file but never had .labels()/.inc()
-                # called on it anywhere in the engine. It backs two dashboard
-                # panels ("C2 Beaconing Maps" and "Beaconing Timeline") and is
-                # the only metric in the whole dashboard that carries an `asn`
-                # label into a legend ({{country}} / {{asn}}) — both panels were
-                # therefore guaranteed to render empty regardless of real
-                # beaconing activity. Attribute detected C2 jitter hits to the
-                # geo of this device's current dominant domain (top_domain,
-                # already computed above for the familiarity dampener) — a
-                # reasonable proxy since beaconing concentrates traffic onto a
-                # single destination by definition.
+                abuseipdb_risk_metric.labels(str_dev_id, str_host, str_type).set(abuse_risk)
+                virustotal_risk_metric.labels(str_dev_id, str_host, str_type).set(vt_risk)
+                beaconing_volume_metric.labels(str_dev_id, str_host, str_type).set(feats.get("top_domain_ratio", 0.0))
+                jitter_cv_metric.labels(str_dev_id, str_host, str_type).set(feats.get("min_jitter_cv", 0.0))
+
                 c2_hits = feats.get("beaconing_c2_count", 0)
                 if c2_hits and top_domain:
-                    _, beacon_geo = _geo_lookup_cached(geoip_engine, top_domain)
+                    resolved_beacon_ip = zeek_fx.get_wire_ip(top_domain)
+                    if resolved_beacon_ip:
+                        beacon_geo = geoip_engine.geo_labels(resolved_beacon_ip)
+                    else:
+                        _, beacon_geo = _geo_lookup_cached(geoip_engine, top_domain)
+                        
                     geo_beacon_metric.labels(
                         str(beacon_geo.get("country", "unknown")),
                         str(beacon_geo.get("asn", "unknown")),
@@ -1046,16 +969,12 @@ def main():
                 new_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("new_domains", 0.0))
                 deep_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("deep_domains", 0.0))
                 nxdomain_tld_conc_metric.labels(str_dev_id, str_host, str_type).set(feats.get("nxdomain_tld_conc", 0.0))
-                # BUGFIX: this used to be `1.0 if risk_score < 4.0 else 0.0`,
-                # which repurposed a metric documented as "Device is on the
-                # safe list (1=excluded from scoring, 0=monitored)" into an
-                # unrelated "is this cycle's risk low" flag. Every device
-                # reaching this line already failed the _is_safe_device()
-                # check above (actual safe-listed devices are dropped with
-                # `continue` before this point and get their 1.0 set there
-                # instead — see the loop entry above), so this is always a
-                # monitored, non-safe device: record 0.0 accordingly.
+                
                 safe_device_metric.labels(str_dev_id, str_host, str_type).set(0.0)
+                
+                rate_baseline_n = sum(getattr(st.rate_baseline, "n", [0, 0]))
+                is_on_probation = (rate_baseline_n < 1000)
+                probation_status_metric.labels(str_dev_id, str_host, str_type).set(1.0 if is_on_probation else 0.0)
 
                 alert_threshold = float(CONFIG["alert_threshold"])
                 if risk_score >= alert_threshold:
@@ -1069,6 +988,7 @@ def main():
                     signature_changed = (sig != last_alert_sig)
 
                     if (now - st.last_alert_time > 300) and (risk_delta >= 1.0 or signature_changed or last_alert_risk < alert_threshold):
+                        LOGGER.info("Alert generated for %s: %s (Risk: %.2f)", st.hostname, sig, risk_score)
                         st.last_alert_time = now
                         st.last_alert_risk = risk_score
                         st.last_alert_signature = sig
@@ -1084,33 +1004,26 @@ def main():
                         st.last_alert_risk = 0.0
                         st.last_alert_signature = ""
 
-            # Global flush of ALL Zeek data tracking maps. 
             zeek_fx.reset_all()
 
-            # =========================================================================
-            # GLOBAL PROMETHEUS EMISSION
-            # Slashes thousands of label loop calls down to 1 call per unique geographical region
-            # =========================================================================
             geo_country_counts = Counter()
-            
             for dim, data in unique_geos.items():
                 c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon = dim
-                
                 geo_risk = 5.0 if c_code in ["RU", "CN", "IR", "KP"] else 0.0
                 geo_risk_metric.labels(c_code, c_city, c_asn, c_org, c_cont, c_lat, c_lon).set(geo_risk)
                 asn_risk_metric.labels(c_asn, c_org).set(5.0 if geo_risk > 0 else 0.0)
                 
-                geo_queries_per_minute.labels(c_code, c_city, c_asn, c_lat, c_lon).set(data["count"] * (60.0 / float(CONFIG["window_seconds"])))
+                geo_queries_per_minute.labels(c_code, c_city, c_asn, c_lat, c_lon).set(data["count"] * (60.0 / float(CONFIG["poll_interval"])))
                 
                 dim_3 = (c_code, c_city, c_asn)
-                geo_unique_domains.labels(*dim_3).set(len(data["domains"]))
+                geo_unique_domains.labels(*dim_3).set(len(data["ips"]))
                 geo_device_count.labels(*dim_3).set(len(data["devices"]))
                 
                 ent_sum = 0.0
-                for d in data["domains"]:
-                    try: ent_sum += _ent_fn(d.split(".")[0])
+                for ip_addr in data["ips"]:
+                    try: ent_sum += _ent_fn(ip_addr)
                     except Exception: ent_sum += 3.0
-                geo_entropy.labels(*dim_3).set(ent_sum / max(len(data["domains"]), 1))
+                geo_entropy.labels(*dim_3).set(ent_sum / max(len(data["ips"]), 1))
                 
                 if c_code != "unknown":
                     geo_country_counts[c_code] += data["count"]
@@ -1153,7 +1066,6 @@ def main():
             LOGGER.info("HOME IDS Engine safely cleanly closed down.")
     except Exception:
         LOGGER.exception("Error executing final engine state checkpoint flush")
-
 
 if __name__ == "__main__":
     main()
