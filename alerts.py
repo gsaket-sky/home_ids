@@ -1,9 +1,8 @@
 """
 alerts.py - Telegram alert delivery plus capped JSON alert logging.
-Codex changelog 2026-06-18:
-  - Added AlertJSONWriter for newline-delimited JSON alert logs.
-  - Active alert log is capped at 1 GB by default and rotates to .1 when full.
-  - Telegram delivery remains asynchronous with retry/rate-limit handling.
+
+Provides the alerting pipeline that streams data to Loki/Promtail in structured JSON format
+while concurrently firing asynchronous alerts out to external API channels (Telegram).
 """
 import json
 import logging
@@ -22,36 +21,10 @@ _DEFAULT_ALERT_FILE_MAX_BYTES = 1024 * 1024 * 1024
 
 class AlertJSONWriter:
     """
-    Writes alerts to a proper JSON file: {"meta": {...}, "alerts": [...]}
-
-    Strategy — atomic append via tmp-file rename:
-      1. Read and parse the existing file (or start fresh).
-      2. Append the new record to the in-memory list.
-      3. If the resulting JSON would exceed max_bytes, trim the oldest
-         entries from the front until it fits (keeps the most recent alerts).
-      4. Write the full document to a .tmp file.
-      5. Rename .tmp → .json  (atomic on Linux/POSIX).
-
-    This means:
-      • The file is always valid, pretty-printed JSON — open it in any
-        viewer, jq, Python, or browser and it just works.
-      • A crash during write never corrupts the existing file; the previous
-        good version is preserved until the rename succeeds.
-      • Rotation: when the file reaches max_bytes, oldest alerts are pruned
-        automatically rather than being thrown away in a hard rotate.
-
-    File format:
-      {
-        "meta": {
-          "schema":       "home_ids_alerts_v2",
-          "generated_at": "2026-06-19T12:00:00Z",
-          "total_alerts": 42,
-          "max_bytes":    1073741824
-        },
-        "alerts": [ { ... }, { ... }, ... ]
-      }
+    Writes alerts to a dual-format JSON store.
+    1. A persistent history JSON block pruned safely at boundaries.
+    2. An append-only JSONL stream optimized for Loki ingest parsing.
     """
-
     _SCHEMA = "home_ids_alerts_v2"
 
     def __init__(self, path: str = "alerts.json", max_bytes: int = _DEFAULT_ALERT_FILE_MAX_BYTES):
@@ -62,8 +35,9 @@ class AlertJSONWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, payload: dict) -> None:
+        """Saves a structured alert event concurrently across tracking files."""
         record = dict(payload)
-        record.setdefault("schema",     self._SCHEMA)
+        record.setdefault("schema", self._SCHEMA)
         record.setdefault("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
         with self._lock:
@@ -81,13 +55,22 @@ class AlertJSONWriter:
                 LOGGER.warning("Could not write streaming JSONL token: %s", exc)
 
     def _write_jsonl_stream(self, record: dict) -> None:
+        """Fires single-line payloads that Grafana/Loki parse locally. Capped at 100MB."""
+        try:
+            if self.jsonl_path.exists() and self.jsonl_path.stat().st_size > 100 * 1024 * 1024:
+                old_file = self.jsonl_path.with_suffix(".jsonl.old")
+                if old_file.exists():
+                    old_file.unlink()
+                self.jsonl_path.rename(old_file)
+        except Exception as exc:
+            LOGGER.warning("Failed to rotate JSONL Loki file structure: %s", exc)
+            
         with open(self.jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
 
     def _load(self) -> list:
         old_jsonl = self.path.with_suffix(".jsonl")
         if not self.path.exists() and old_jsonl.exists():
-            LOGGER.info("Migrating %s → %s", old_jsonl.name, self.path.name)
             return self._load_jsonl(old_jsonl)
         if not self.path.exists():
             return []
@@ -126,30 +109,29 @@ class AlertJSONWriter:
                 break
             drop = max(1, len(alerts) // 10)   
             alerts = alerts[drop:]
-            LOGGER.info(
-                "Alert log size cap reached — dropped %d oldest alerts (%d remain)",
-                drop, len(alerts)
-            )
+            LOGGER.info("Alert log size cap reached — dropped %d oldest alerts (%d remain)", drop, len(alerts))
         return alerts
 
     def _serialise(self, alerts: list) -> str:
         doc = {
             "meta": {
-                "schema":       self._SCHEMA,
+                "schema": self._SCHEMA,
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "total_alerts": len(alerts),
-                "max_bytes":    self.max_bytes,
+                "max_bytes": self.max_bytes,
             },
             "alerts": alerts,
         }
         return json.dumps(doc, indent=2, default=str)
 
     def _save(self, alerts: list) -> None:
+        """Atomic append protection via OS file replacement hooks."""
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(self._serialise(alerts), encoding="utf-8")
         tmp.replace(self.path)   
 
 class AlertManager:
+    """Manages the remote delivery of alerts over Telegram via background queues."""
     def __init__(self, token: str, chat_id: str, enabled: bool = True):
         self.token = token
         self.chat_id = chat_id
@@ -164,7 +146,7 @@ class AlertManager:
         try:
             self.q.put_nowait(message)
         except queue.Full:
-            LOGGER.warning("alert queue full - message dropped")
+            LOGGER.warning("Alert queue full - message dropped")
             pass
 
     def stop(self, timeout: float = 12.0) -> None:
@@ -199,7 +181,6 @@ class AlertManager:
                     if resp.status_code == 429:
                         retry_after = int(resp.json().get("parameters", {}).get("retry_after", 5))
                         LOGGER.warning("Telegram rate-limited, sleeping %ds", retry_after)
-
                         self._stop.wait(timeout=min(retry_after, 30))
                         if self._stop.is_set():
                             break

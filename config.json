@@ -28,6 +28,11 @@
     "127.0.0.1",
     "192.168.178.94"
   ],
+  "safe_domains": [
+    "teams.events.data.microsoft.com",
+    "login.microsoftonline.com",
+    "s3.amazonaws.com"
+  ],
   "safe_host_patterns": [
     "pihole",
     "pi-hole",

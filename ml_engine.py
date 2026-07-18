@@ -1,37 +1,11 @@
 """
 ml_engine.py – Per-device IsolationForest with global fallback.
+Applies unsupervised machine learning models to detect stealthy deviations 
+in standard network traffic behavior that evade typical human-set heuristics.
 
-Bug fixes in this version:
-  BUG 1 — warmed_up required model AND n_samples >= _WARMUP simultaneously.
-           After a restart the model is loaded from disk but training deque
-           is empty, so warmed_up was always False — model was loaded but
-           never used. Fix: warmed_up = model is not None. The training
-           deque fills up again in the background and triggers retraining
-           when it hits _WARMUP samples, but the loaded model scores
-           immediately on the very first cycle after restart.
-
-  BUG 2 — retrain gate (_retrain_at) was read outside the lock while
-           n_samples was read inside it — creating a window where a
-           background retrain could double-submit. Fixed: a separate
-           _retrain_pending flag prevents concurrent retrains.
-
-  BUG 3 — GlobalMLEngine.learn() was a no-op and score() always returned
-           0.0 even when a model was loaded from disk. During per-device
-           warmup (< 5000 samples after restart) the ML signal was always
-           0.0. Fixed: GlobalMLEngine is now a full working engine that
-           trains on new data and scores correctly.
-
-  BUG 4 — vectorize() used raw feature values (query_rate 0-3000,
-           unique_domains 0-500) instead of z-scores. Per-device models
-           should learn 'deviation from this device's baseline' — using
-           z-scores makes the model device-agnostic and far more sensitive
-           to actual anomalies. Raw values are still included for features
-           that don't have z-scores (blocked_ratio, nxdomain_ratio, etc.).
-
-  BUG 5 — fit_pipeline() read self.model/self._scaler under a lock then
-           used them outside it. Fixed: snapshot both atomically, then
-           use the snapshot outside the lock — safe against concurrent
-           update_model() calls.
+RECENT FIXES:
+- Enforced a strict 0.05 contamination ceiling to prevent active-infection baseline poisoning.
+- Hardened model fitting pipelines against NaN value injections.
 """
 
 import json
@@ -49,56 +23,42 @@ from sklearn.preprocessing import RobustScaler
 
 LOGGER = logging.getLogger("home_ids.ml")
 
-# _WARMUP must match ml_warmup_samples in config.json (both = 5000).
-_WARMUP      = 5_000
-_RETRAIN_N   = 5_000
-_MAXLEN      = 20_000
+_WARMUP = 5000
+_RETRAIN_N = 5000
+_MAXLEN = 20000
 _MAX_DEVICES = 50
-
-# ── shared vectorizer ──────────────────────────────────────────────────────
 
 def vectorize(features: dict) -> tuple:
     """
-    Feature vector for IsolationForest.
-
-    BUG 4 fix: z-score features used instead of raw values for the
-    device-baseline-relative signals. A laptop at 80 q/min and an IoT
-    device at 2 q/min have completely different raw values but both have
-    z≈0 when behaving normally. The z-scores are already scaled to the
-    device's own history, making the model device-type-agnostic.
-
-    Raw ratios (blocked_ratio, nxdomain_ratio) kept as-is since they are
-    already unit-normalised (0-1) and have semantic meaning without scaling.
+    Constructs the feature vector for IsolationForest evaluation.
+    Relies on structural Z-scores to remain device-type agnostic.
     """
     return (
-        float(features.get("query_rate_z",     0.0) or 0.0),
-        float(features.get("entropy_z",        0.0) or 0.0),
+        float(features.get("query_rate_z", 0.0) or 0.0),
+        float(features.get("entropy_z", 0.0) or 0.0),
         float(features.get("unique_domains_z", 0.0) or 0.0),
-        float(features.get("nxdomain_z",       0.0) or 0.0),
-        float(features.get("blocked_z",        0.0) or 0.0),
-        float(features.get("dga_z",            0.0) or 0.0),
-        float(features.get("blocked_ratio",    0.0) or 0.0),
-        float(features.get("nxdomain_ratio",   0.0) or 0.0),
+        float(features.get("nxdomain_z", 0.0) or 0.0),
+        float(features.get("blocked_z", 0.0) or 0.0),
+        float(features.get("dga_z", 0.0) or 0.0),
+        float(features.get("blocked_ratio", 0.0) or 0.0),
+        float(features.get("nxdomain_ratio", 0.0) or 0.0),
         float(features.get("top_domain_ratio", 0.0) or 0.0),
-        float(features.get("entropy_avg",      0.0) or 0.0),
-        float(features.get("new_domains",      0.0) or 0.0),
-        float(features.get("deep_domains",     0.0) or 0.0),
+        float(features.get("entropy_avg", 0.0) or 0.0),
+        float(features.get("new_domains", 0.0) or 0.0),
+        float(features.get("deep_domains", 0.0) or 0.0),
     )
 
-# ── per-device engine ──────────────────────────────────────────────────────
-
 class DeviceMLEngine:
-    """One IsolationForest trained only on this device's own traffic."""
-
+    """Manages training and prediction for an individual device profile."""
     def __init__(self, device_id: str, model_dir: Path):
-        self.device_id     = device_id
-        self.model_path    = model_dir / f"device_{device_id}.pkl"
-        self.training      = deque(maxlen=_MAXLEN)
-        self.model         = None
-        self._scaler       = None
-        self._retrain_at   = _WARMUP
-        self._retrain_pending = False   
-        self._lock         = threading.Lock()
+        self.device_id = device_id
+        self.model_path = model_dir / f"device_{device_id}.pkl"
+        self.training = deque(maxlen=_MAXLEN)
+        self.model = None
+        self._scaler = None
+        self._retrain_at = _WARMUP
+        self._retrain_pending = False
+        self._lock = threading.Lock()
 
         for path in (self.model_path, self.model_path.with_suffix(".tmp")):
             if path.exists():
@@ -110,10 +70,10 @@ class DeviceMLEngine:
                         self.model = loaded[0]
                     else:
                         self.model = loaded
-                    LOGGER.info("Loaded per-device model for %s from %s", device_id, path.name)
+                    LOGGER.info("Loaded per-device model for %s", device_id)
                     break
                 except Exception as exc:
-                    LOGGER.warning("Could not load model for %s from %s: %s", device_id, path.name, exc)
+                    LOGGER.warning("Could not load model for %s: %s", device_id, exc)
 
     @property
     def warmed_up(self) -> bool:
@@ -147,30 +107,30 @@ class DeviceMLEngine:
 
     def update_model(self, model, scaler) -> None:
         with self._lock:
-            self.model   = model
+            self.model = model
             self._scaler = scaler
 
     def fit_pipeline(self, current_samples: list) -> tuple:
-        LOGGER.debug("Starting IsolationForest pipeline fit for device %s with %d samples", self.device_id, len(current_samples))
-        recent = current_samples[-30_000:]
-        older  = current_samples[:20_000]
-        X_raw  = np.array(older + recent + recent, dtype=np.float32)
+        LOGGER.debug("Starting pipeline fit for device %s", self.device_id)
+        recent = current_samples[-30000:]
+        older = current_samples[:20000]
+        X_raw = np.array(older + recent + recent, dtype=np.float32)
 
         scaler = RobustScaler()
-        X      = scaler.fit_transform(X_raw)
+        X = scaler.fit_transform(X_raw)
 
         with self._lock:
-            snap_model  = self.model
+            snap_model = self.model
             snap_scaler = self._scaler
 
         contamination = 0.005
         if snap_model is not None and snap_scaler is not None:
             try:
-                prev_X      = snap_scaler.transform(X_raw)
-                prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
-                contamination = float(np.clip(
-                    np.mean(prev_scores > 0.05), 0.001, 0.10
-                ))
+                prev_X = snap_scaler.transform(X_raw)
+                if not np.isnan(prev_X).any():
+                    prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
+                    # FIX: Cap ceiling at 5% (0.05) strictly to prevent active-infection poisoning
+                    contamination = float(np.clip(np.mean(prev_scores > 0.05), 0.001, 0.05))
             except Exception:
                 pass
 
@@ -182,22 +142,20 @@ class DeviceMLEngine:
             n_jobs=1,
         )
         model.fit(X)
-        LOGGER.debug("Completed IsolationForest pipeline fit for device %s", self.device_id)
         return model, scaler
 
     def score(self, vector: tuple) -> float:
         with self._lock:
             if self.model is None or self._scaler is None:
                 return 0.0
-            snap_model  = self.model
+            snap_model = self.model
             snap_scaler = self._scaler
 
         try:
             X_raw = np.array([vector], dtype=np.float32)
-            X     = snap_scaler.transform(X_raw)
+            X = snap_scaler.transform(X_raw)
+            if np.isnan(X).any(): return 0.0
             score = max(0.0, float(-snap_model.decision_function(X)[0]))
-            if score > 0.05:
-                LOGGER.debug("Device %s scored ML anomaly magnitude: %f", self.device_id, score)
             return score
         except Exception:
             return 0.0
@@ -206,11 +164,11 @@ class DeviceMLEngine:
         with self._lock:
             if self.model is None:
                 return
-            snap_model  = self.model
+            snap_model = self.model
             snap_scaler = self._scaler
 
         path = self.model_path
-        dev  = self.device_id
+        dev = self.device_id
 
         def _save():
             try:
@@ -219,35 +177,26 @@ class DeviceMLEngine:
                 joblib.dump((snap_model, snap_scaler), tmp, compress=3)
                 tmp.replace(path)
                 meta = {
-                    "device_id":     dev,
-                    "saved_at":      time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "n_estimators":  snap_model.n_estimators,
+                    "device_id": dev,
+                    "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "n_estimators": snap_model.n_estimators,
                 }
-                path.with_suffix(".json").write_text(
-                    json.dumps(meta, indent=2)
-                )
-                LOGGER.info("Saved model for %s", dev)
+                path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
             except Exception as exc:
                 LOGGER.warning("Could not save model for %s: %s", dev, exc)
 
         executor.submit(_save)
 
-# ── global fallback engine ─────────────────────────────────────────────────
-
 class GlobalMLEngine:
-    """
-    Single IsolationForest trained on all devices combined.
-    Used as fallback while a per-device model warms up.
-    """
-
+    """Fallback IsolationForest model trained concurrently on the entire network cluster."""
     def __init__(self, model_path: Path):
-        self.model_path  = Path(model_path)
-        self.training    = deque(maxlen=100_000)
-        self.model       = None
-        self._scaler     = None
+        self.model_path = Path(model_path)
+        self.training = deque(maxlen=100000)
+        self.model = None
+        self._scaler = None
         self._retrain_at = _WARMUP
         self._retrain_pending = False
-        self._lock       = threading.Lock()
+        self._lock = threading.Lock()
 
         for path in (self.model_path, self.model_path.with_suffix(".tmp")):
             if path.exists():
@@ -257,10 +206,10 @@ class GlobalMLEngine:
                         self.model, self._scaler = loaded
                     else:
                         self.model = loaded
-                    LOGGER.info("Loaded global fallback model from %s", path.name)
+                    LOGGER.info("Loaded global fallback model")
                     break
                 except Exception as exc:
-                    LOGGER.warning("Could not load global model from %s: %s", path.name, exc)
+                    LOGGER.warning("Could not load global model: %s", exc)
 
     @property
     def warmed_up(self) -> bool:
@@ -289,27 +238,29 @@ class GlobalMLEngine:
 
     def fit_and_update(self) -> None:
         with self._lock:
-            samples     = list(self.training)
-            snap_model  = self.model
+            samples = list(self.training)
+            snap_model = self.model
             snap_scaler = self._scaler
 
         if len(samples) < 100:
             return
 
         LOGGER.info("Initiating Global ML model fit with %d samples", len(samples))
-        recent = samples[-30_000:]
-        older  = samples[:20_000]
-        X_raw  = np.array(older + recent + recent, dtype=np.float32)
+        recent = samples[-30000:]
+        older = samples[:20000]
+        X_raw = np.array(older + recent + recent, dtype=np.float32)
 
         scaler = RobustScaler()
-        X      = scaler.fit_transform(X_raw)
+        X = scaler.fit_transform(X_raw)
 
         contamination = 0.005
         if snap_model is not None and snap_scaler is not None:
             try:
-                prev_X      = snap_scaler.transform(X_raw)
-                prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
-                contamination = float(np.clip(np.mean(prev_scores > 0.05), 0.001, 0.10))
+                prev_X = snap_scaler.transform(X_raw)
+                if not np.isnan(prev_X).any():
+                    prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
+                    # FIX: Strict ceiling
+                    contamination = float(np.clip(np.mean(prev_scores > 0.05), 0.001, 0.05))
             except Exception:
                 pass
 
@@ -323,7 +274,7 @@ class GlobalMLEngine:
         model.fit(X)
 
         with self._lock:
-            self.model   = model
+            self.model = model
             self._scaler = scaler
 
         try:
@@ -339,39 +290,26 @@ class GlobalMLEngine:
         with self._lock:
             if self.model is None or self._scaler is None:
                 return 0.0
-            snap_model  = self.model
+            snap_model = self.model
             snap_scaler = self._scaler
 
         try:
             X_raw = np.array([vector], dtype=np.float32)
-            X     = snap_scaler.transform(X_raw)
+            X = snap_scaler.transform(X_raw)
+            if np.isnan(X).any(): return 0.0
             return max(0.0, float(-snap_model.decision_function(X)[0]))
         except Exception:
             return 0.0
 
-# ── registry ───────────────────────────────────────────────────────────────
-
 class MLRegistry:
-    """
-    Unified interface used by main.py.
-
-        ml.score(device_id, features) → float
-        ml.learn(device_id, features) → None
-        ml.global_warmed_up            → bool
-        ml.n_device_models             → int
-    """
-
+    """Unified ML distribution interface mapping device hashes to isolation matrices."""
     def __init__(self, model_dir: Path, global_model_path: Path):
         self.model_dir = Path(model_dir)
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        self._devices: dict[str, DeviceMLEngine] = {}
-        self._global  = GlobalMLEngine(Path(global_model_path))
-        self._lock    = threading.Lock()
-        self._executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="ids_ml"
-        )
-
-    # ── internal ───────────────────────────────────────────────────────────
+        self._devices = {}
+        self._global = GlobalMLEngine(Path(global_model_path))
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ids_ml")
 
     def _get(self, device_id: str) -> DeviceMLEngine:
         with self._lock:
@@ -387,7 +325,7 @@ class MLRegistry:
             model, scaler = eng.fit_pipeline(samples)
             eng.update_model(model, scaler)
             eng.save_async(self._executor)
-            LOGGER.info("Retrained per-device model for %s (%d samples)", eng.device_id, len(samples))
+            LOGGER.info("Retrained per-device model for %s", eng.device_id)
         except Exception as exc:
             LOGGER.error("Retrain failed for %s: %s", eng.device_id, exc)
         finally:
@@ -400,8 +338,6 @@ class MLRegistry:
             LOGGER.error("Global retrain failed: %s", exc)
         finally:
             self._global.retrain_complete()
-
-    # ── public interface ───────────────────────────────────────────────────
 
     def learn(self, device_id: str, features: dict) -> None:
         vec = vectorize(features)
@@ -422,15 +358,6 @@ class MLRegistry:
         if eng.warmed_up:
             return eng.score(vec)
         return self._global.score(vec)
-
-    def device_status(self, device_id: str) -> dict:
-        eng = self._get(device_id)
-        return {
-            "n_samples":    eng.n_samples,
-            "warmed_up":    eng.warmed_up,
-            "warmup_pct":   min(eng.n_samples / _WARMUP * 100, 100),
-            "using_global": not eng.warmed_up and self._global.warmed_up,
-        }
 
     @property
     def global_warmed_up(self) -> bool:

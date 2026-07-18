@@ -1,5 +1,8 @@
 """
 geoip_engine.py - GeoIP City (+ optional ASN) lookups for Home IDS.
+
+Cross-references IPs to resolve physical coordinates, country flags, 
+and upstream infrastructure providers (Autonomous Systems).
 """
 import geoip2.database
 import geoip2.errors
@@ -10,9 +13,9 @@ import logging
 LOGGER = logging.getLogger("home_ids.geoip")
 
 class GeoIPEngine:
+    """Manages offline MaxMind databases for high-speed resolution."""
     def __init__(self, db_path, asn_db_path: str = ""):
         self.reader = geoip2.database.Reader(db_path)
-        # BUGFIX: Optional ASN/Org reader initialization prevents metric starvation
         self.asn_reader = None
         if asn_db_path:
             try:
@@ -47,14 +50,19 @@ class GeoIPEngine:
         return None
 
     def geo_labels(self, ip):
+        """Constructs safe dictionaries for metric exports, preventing NoneType errors."""
         geo = self.lookup(ip)
         if not geo:
             return {
-                "country": "unknown", "city": "unknown", "continent": "unknown",
-                "latitude": "0", "longitude": "0", "asn": "unknown", "org": "unknown"
+                "country": "unknown",
+                "city": "unknown",
+                "continent": "unknown",
+                "latitude": "0",
+                "longitude": "0",
+                "asn": "unknown",
+                "org": "unknown"
             }
         
-        # BUGFIX: Populate real ASN and Org fields when the secondary database path is active
         asn_label = "unknown"
         org_label = "unknown"
         asn_record = self.lookup_asn(ip)
