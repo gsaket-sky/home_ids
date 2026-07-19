@@ -1,0 +1,132 @@
+{
+  "title": "Home IDS 🛡️ Tier 2: Engine System Health & Performance",
+  "uid": "ids-system-health",
+  "tags": ["ids", "tier2", "health", "performance", "showcase"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "PROMETHEUS_DS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus Source"
+      },
+      {
+        "name": "LOKI_DS",
+        "type": "datasource",
+        "query": "loki",
+        "label": "Loki Source"
+      },
+      {
+        "name": "device",
+        "type": "query",
+        "datasource": "${PROMETHEUS_DS}",
+        "query": "label_values(home_ids_risk_score, hostname)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "Navigation Matrix",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | [📊 DNS & ML Diagnostics](/d/ids-dns-ml/tier-2-threat-id-dns-ml-diagnostics?var-device=${device}) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-ndr/tier-2-threat-id-network-lateral-zeek-ndr?var-device=${device}) | [🌍 GeoIP & OSINT Intel](/d/ids-geo/tier-2-threat-id-geoip-osint-intel?var-device=${device}) | **⚙️ Engine System Health**"
+      }
+    },
+    {
+      "type": "text",
+      "title": "📖 Analyst Field Guide: Core Processing Latency & DB Backpressure",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 2 },
+      "options": {
+        "mode": "markdown",
+        "content": "#### ⏳ Database Lag & Events Ingest Velocity\n* **What this monitors:** Evaluates the synchronization speed between the Pi-hole SQLite Write-Ahead Log (WAL) transaction stream and our core Python evaluation thread.\n* **🟢 Normal State:** Lag stays strictly under 2.0 seconds. The line graph should mirror your local network traffic trends smoothly.\n* **🔴 Problem State:** If the lag begins climbing in a diagonal line, the SQLite database may be locked, or the script is experiencing compute starvation. "
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Collector Database Latency Lag (Seconds)",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_collector_lag_seconds", "legendFormat": "Database Processing Lag" } ],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "value": 0, "color": "green" }, { "value": 5, "color": "orange" }, { "value": 15, "color": "red" } ] }, "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "SQLite Transaction Event Processing Ingest Velocity",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 2 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "rate(home_ids_events_processed_total[5m])", "legendFormat": "DNS Events Ingested / Sec" } ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineInterpolation": "smooth" } } }
+    },
+    {
+      "type": "text",
+      "title": "📖 Analyst Field Guide: Memory Allocations & Stability Matrices",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 7 },
+      "options": {
+        "mode": "markdown",
+        "content": "#### 🧠 Python Runtime Footprint & Stabilization\n* **What this monitors:** Tracks the actual RAM occupied by the IDS daemon process (Resident Set Size).\n* **🟢 Normal State:** A stable \"sawtooth\" pattern or a completely flat horizontal bar. This confirms that our size-capped dictionaries are successfully evicting old states and keeping RAM use constrained.\n* **🔴 Problem State:** A continuous, unmitigated upward diagonal line signifies a severe memory leak, meaning a data structure is storing parameters indefinitely without pruning."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "IDS Engine Daemon RAM Footprint (RSS)",
+      "gridPos": { "h": 5, "w": 16, "x": 8, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "process_resident_memory_bytes{job=\"home_ids\"} / 1024 / 1024", "legendFormat": "Core Engine Memory Overhead" } ],
+      "fieldConfig": { "defaults": { "unit": "megabytes", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } } }
+    },
+    {
+      "type": "text",
+      "title": "📖 Analyst Field Guide: Alert Delivery & Notification Pipeline Reliability",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 12 },
+      "options": {
+        "mode": "markdown",
+        "content": "#### ✉️ Notification Queue Retries & Drops\n* **What this monitors:** Validates the operational status of our out-of-band Telegram alert engine.\n* **🟢 Normal State:** The alert backlog queue sits firmly at 0. Successful alert processing increments cleanly.\n* **🔴 Problem State:** If the alert queue rises alongside metric retry ticks, the system is actively backing off due to Telegram API rate-limiting (HTTP 429) or an internet drop, preserving alerts in host RAM until connectivity recovers."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Notification Thread Delivery Degradation Metrics",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        { "expr": "rate(ids_alert_delivery_retries_total[5m]) * 60", "legendFormat": "Alert Delivery Retries / Min" },
+        { "expr": "rate(ids_alert_delivery_dropped_total[5m]) * 60", "legendFormat": "Alert Handshake Drops / Min" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 30 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Notification Internal Buffer Backlog Queue Size",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_alert_queue_size", "legendFormat": "Buffered Alert Payloads" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "value": 0, "color": "green" }, { "value": 5, "color": "orange" }, { "value": 20, "color": "red" } ] }, "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "type": "logs",
+      "title": "🪵 Raw System Diagnostics Log Stream (Loki Integration)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "datasource": "${LOKI_DS}",
+      "targets": [
+        {
+          "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | __error__=\"\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "prettifyJSON": true
+      }
+    }
+  ]
+}

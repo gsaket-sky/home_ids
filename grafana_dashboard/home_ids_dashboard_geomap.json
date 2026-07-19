@@ -1,0 +1,170 @@
+{
+  "title": "Home IDS 🛡️ Tier 2: GeoIP & OSINT Intel",
+  "uid": "ids-tier2-geo",
+  "tags": ["ids", "tier2", "geo", "osint", "showcase"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "PROMETHEUS_DS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus Source"
+      },
+      {
+        "name": "LOKI_DS",
+        "type": "datasource",
+        "query": "loki",
+        "label": "Loki Source"
+      },
+      {
+        "name": "device",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+        "query": "label_values(home_ids_risk_score, hostname)",
+        "refresh": 1,
+        "includeAll": true,
+        "customAllValue": ".*",
+        "multi": false,
+        "current": { "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | [📊 DNS & ML Diagnostics](/d/ids-tier2-dns/home-ids-tier-2-dns-ml-diagnostics?var-device=${device}) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-network-lateral-zeek-ndr?var-device=${device}) | **🌍 GeoIP & OSINT Intel** | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
+      }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 2 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🚨 Threat: Threat Intelligence & Sandbox Detonations\n**How to read this section:** Skips behavioral guesswork and looks for absolute, verified malware signatures using your integrated API feeds (AbuseIPDB, VirusTotal, AlienVault OTX).\n* 🟢 **Normal:** These panels should be completely flat at zero.\n* 🔴 **Abnormal / Threat:** Any spike means an internal device successfully resolved or connected to an explicitly listed global hacker blocklist or a known malicious payload dropper."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Threat Intelligence Feed Match Risk",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_ti_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.5 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "AbuseIPDB Reputation Threat Score",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_abuseipdb_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 3 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "VirusTotal Sandbox Analysis Hazard",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_virustotal_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 3 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: OSINT & Threat Intel Forensics (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)threat intelligence|abuseipdb|virustotal\"" } ],
+      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 21 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 📡 Global Infrastructure & Geographic Routing (Global Flow)\n**How to trace routing parameters:** Correlates external network endpoints back to their upstream routing providers (ASNs) and physical borders. *(Note: Maps represent total network environment outflow).* \n* 🟢 **Normal:** Traffic routes cleanly to AWS, Google, Azure, and your home country.\n* 🔴 **Abnormal / Threat:** Large red bubbles over high-risk jurisdictions, or malicious ASN blocklist flags illuminating in the Risk Magnitude table."
+      }
+    },
+    {
+      "type": "table",
+      "title": "Risk Magnitude Allocation by ASN Matrix",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_asn_risk_score", "format": "table", "instant": true } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 4 } ] } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Top External Target Routing Providers (ASN Volume)",
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "sum by (asn, org) (rate(home_ids_geo_traffic_total[5m]))", "legendFormat": "{{asn}} ({{org}})" } ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 0, "lineWidth": 1 } } }
+    },
+    {
+      "type": "geomap",
+      "title": "Geo Threat Map (Coords)",
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        { "expr": "home_ids_geo_risk", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "home_ids_geo_traffic_total", "format": "table", "instant": true, "refId": "B" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "latitude", "mode": "outer" } },
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Time 1": true, "__name__": true, "__name__ 1": true } } }
+      ],
+      "options": {
+        "view": { "id": "zero", "lat": 0, "lon": 0, "zoom": 1 },
+        "controls": { "mouseWheelZoom": true, "showZoom": true },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Threat Layer",
+            "location": { "mode": "coords", "latitude": "latitude", "longitude": "longitude" },
+            "color": { "field": "Value #A" },
+            "size": { "field": "Value #B", "min": 5, "max": 40 }
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Value #A" }, "properties": [ { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 5 } ] } } ] }
+        ]
+      }
+    },
+    {
+      "type": "geomap",
+      "title": "Threat Density (Country Code Lookup)",
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_country_threat_density", "format": "table", "instant": true } ],
+      "options": {
+        "view": { "id": "zero", "lat": 0, "lon": 0, "zoom": 1 },
+        "controls": { "mouseWheelZoom": true, "showZoom": true },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Country Layer",
+            "location": { "mode": "lookup", "lookup": "country" },
+            "color": { "field": "Value" },
+            "size": { "field": "Value", "min": 5, "max": 25 }
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 } ] } }
+      }
+    }
+  ]
+}

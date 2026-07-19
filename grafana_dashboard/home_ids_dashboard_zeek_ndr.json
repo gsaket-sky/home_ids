@@ -1,0 +1,156 @@
+{
+  "title": "Home IDS 🛡️ Tier 2: Network & Lateral (Zeek NDR)",
+  "uid": "ids-tier2-ndr",
+  "tags": ["ids", "tier2", "ndr", "zeek", "showcase"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "PROMETHEUS_DS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus Source"
+      },
+      {
+        "name": "LOKI_DS",
+        "type": "datasource",
+        "query": "loki",
+        "label": "Loki Source"
+      },
+      {
+        "name": "device",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+        "query": "label_values(home_ids_risk_score, hostname)",
+        "refresh": 1,
+        "includeAll": true,
+        "customAllValue": ".*",
+        "multi": false,
+        "current": { "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | [📊 DNS & ML Diagnostics](/d/ids-tier2-dns/home-ids-tier-2-dns-ml-diagnostics?var-device=${device}) | **🔒 Network & Lateral (Zeek NDR)** | [🌍 GeoIP & OSINT Intel](/d/ids-tier2-geo/home-ids-tier-2-geo-osint?var-device=${device}) | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
+      }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 2 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🚨 Threat: Defense Evasion & Lateral Movement\n**How to read this section:** Catches devices trying to bypass your Pi-hole entirely, or compromised internal devices turning around and attacking other devices on your home network.\n* 🟢 **Normal:** All panels are completely flat at zero.\n* 🔴 **Abnormal / Threat:** DoH Bypass > 0 means a device (often a smart TV or malware) is hardcoded to use Cloudflare/Google DNS directly via HTTPS, blinding your Pi-hole. Lateral Movement > 0 is critical: an internal device is actively port-scanning or attempting SSH/SMB connections against another private device."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DoH Bypass Attempts (Cloudflare, Google, Quad9)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zeek_doh_bypass{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Internal Lateral Movement (SSH, RDP, SMB scanning)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zeek_lateral_moves{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Suspicious Ext Ports",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zeek_suspicious_ports{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "JA3 Malicious TLS Hits",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 20 } } }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 13 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🚨 Threat: C2 Beaconing & Jitter\n**How to read this section:** Malware 'beacons' or 'calls home' to a hacker's server periodically. Advanced malware does this slowly (e.g., exactly once every 5 minutes) to evade volume-based detection.\n* 🟢 **Normal:** Human web browsing is erratic and random. The Jitter chart should be completely empty.\n* 🔴 **Abnormal / Threat:** A bar appearing here means Zeek tracked requests to a single destination with mechanical, robotic timing precision (a Coefficient of Variation under 10%). This is a confirmed, active Command & Control channel."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Machine C2 Beaconing (Jitter CV < 0.1)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_beaconing_c2_count{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Single Domain Concentration Intensity (Top Domain Ratio)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_beaconing_volume_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Single-Target Density" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 } ] }, "custom": { "fillOpacity": 0 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Minimum Timing Coefficient of Variation (Jitter CV Base)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_jitter_cv_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} CV Token" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": 0 }, { "color": "green", "value": 0.1 } ] }, "custom": { "fillOpacity": 0 } } }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 24 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🚨 Threat: Data Exfiltration (Outbound Bytes)\n**How to read this section:** Attackers steal data by blasting a massive TCP/UDP upload.\n* 🟢 **Normal:** The Outbound Bytes Z-Score casually fluctuates between -2 and +2.\n* 🔴 **Abnormal / Threat:** An Exfiltration Z-Score > 5.0 means a massive payload was uploaded, completely shattering historical baselines."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Network Connection Volume (Zeek Flow Ingest)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zeek_conn_count{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "TCP/UDP Data Exfiltration Z-Score (Outbound Zeek Bytes)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_outbound_bytes_zscore{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 3 }, { "color": "red", "value": 5 } ] }, "custom": { "fillOpacity": 0, "lineWidth": 2 } } }
+    },
+    {
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Defense Evasion & Lateral Movements (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 35 },
+      "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)doh tunneling bypass|internal lateral movement|suspicious destination port|zeek notice|exfiltration payload burst|jitter clock verification|single-domain beaconing\"" } ],
+      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
+    }
+  ]
+}

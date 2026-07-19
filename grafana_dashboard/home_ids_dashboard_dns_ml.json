@@ -1,0 +1,195 @@
+{
+  "title": "Home IDS 🛡️ Tier 2: DNS & Machine Learning Diagnostics",
+  "uid": "ids-tier2-dns",
+  "tags": ["ids", "tier2", "dns", "ml", "showcase"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "PROMETHEUS_DS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus Source"
+      },
+      {
+        "name": "LOKI_DS",
+        "type": "datasource",
+        "query": "loki",
+        "label": "Loki Source"
+      },
+      {
+        "name": "device",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+        "query": "label_values(home_ids_risk_score, hostname)",
+        "refresh": 1,
+        "includeAll": true,
+        "customAllValue": ".*",
+        "multi": false,
+        "current": { "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | **📊 DNS & ML Diagnostics** | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-zeek-ndr?var-device=${device}) | [🌍 GeoIP & OSINT Intel](/d/ids-tier2-geo/home-ids-tier-2-geo-osint?var-device=${device}) | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
+      }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 2 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🤖 Threat: ML Behavioral Anomalies & Risk Velocity\n**How to read this section:** The IsolationForest AI engine finds stealthy, 'living-off-the-land' attacks that keep their volume low enough to bypass human-made thresholds.\n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Abnormal / Threat:** ML Score > 0.05 means the AI detected a structural matrix shift (the pattern of traffic is fundamentally alien to that device's history). High Risk Velocity indicates the risk score shot up violently compared to its own rolling hourly average."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "ML Anomaly Score (IsolationForest)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 } ] }, "custom": { "fillOpacity": 0, "lineWidth": 2 } } }
+    },
+    {
+      "type": "stat",
+      "title": "Max ML Score",
+      "gridPos": { "h": 8, "w": 4, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "max(home_ids_ml_anomaly_score{hostname=~\"$device\"})" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.05 } ] } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Risk Velocity Z-Score",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_risk_velocity{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 4 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: ML Mathematical Outliers (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)ml anomaly|risk velocity\"" } ],
+      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 21 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🚨 Threat: Ransomware & Domain Generation Algorithms (DGA)\n**How to read this section:** Domain Generation Algorithms (DGAs) are used by ransomware and botnets to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a live command server.\n* 🟢 **Normal:** NXDOMAIN (failed lookup) ratios hover below 10%. New domains occasionally bump up when visiting new websites.\n* 🔴 **Abnormal / Threat:** A massive vertical spike in 'New Domains' and 'NXDOMAIN Ratio'. If NXDOMAIN TLD Concentration hits > 80%, the malware is hyper-focusing its guesses on a specific suffix (like `.ru` or `.cc`). Deep Domains track DNS tunneling (payload exfiltration)."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "New Domains (DGA Burst)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_new_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Suspicious / Algorithmic Domains",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Deep Domains (Tunneling Labels > 5)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_deep_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "NXDOMAIN Ratio (Lookup Failures)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.5 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "NXDOMAIN TLD Concentration",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 0.7 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "DNS Entropy Average",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_entropy_avg{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "logs",
+      "title": "🔎 Filtered Workspace: Ransomware & DGA Triage (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)nxdomain ratio|blocked dns ratio|suspicious.*dga|first-seen domain burst|nxdomain tld concentration|probationary|correlated dns baseline\"" } ],
+      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
+    },
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 48 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 📈 Threat: Query Saturation & Adaptive Baselines\n**How to read this section:** The corridor chart overlays live traffic against its own established mathematical 'norm' based on the time of day.\n* 🟢 **Normal:** Solid traffic lines stay comfortably beneath the dotted 'Threat Limit' ceiling.\n* 🔴 **Abnormal / Threat:** Solid traffic lines breaking violently through the dotted Threat Limit line triggers immediate threshold events."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Threat Thresholds vs Safe Baseline Corridor (Query Rate)",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        { "expr": "home_ids_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Live" },
+        { "expr": "home_ids_query_rate_baseline_mean{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Mean" },
+        { "expr": "home_ids_query_rate_threshold_limit{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Limit" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 0, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*Mean.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [ 10, 10 ], "fill": "dash" } }, { "id": "custom.lineWidth", "value": 1 } ] },
+          { "matcher": { "id": "byRegexp", "options": ".*Limit.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [ 5, 5 ], "fill": "dash" } }, { "id": "custom.fillBelowTo", "value": ".*Mean.*" }, { "id": "custom.fillOpacity", "value": 15 }, { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } } ] }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Baseline Deviations (Z-Scores) — Behavioral Threats",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        { "expr": "home_ids_zscore_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Query-Z" },
+        { "expr": "home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}} NX-Z" },
+        { "expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} DGA-Z" },
+        { "expr": "home_ids_zscore_unique_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Unique-Z" }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 3 }, { "color": "red", "value": 6 } ] }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } }
+    }
+  ]
+}
