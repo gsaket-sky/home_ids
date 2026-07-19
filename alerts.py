@@ -3,6 +3,12 @@ alerts.py - Telegram alert delivery plus capped JSON alert logging.
 
 Provides the alerting pipeline that streams data to Loki/Promtail in structured JSON format
 while concurrently firing asynchronous alerts out to external API channels (Telegram).
+
+RECENT FIXES:
+- Replaced fire-and-forget Telegram delivery with a state-aware requeueing worker.
+- Implemented exponential backoff for transient network blips and API rate limits.
+- Added Prometheus metrics to track alert retries and permanent delivery failures.
+- Capped dead-letter retries at 25 attempts to prevent memory exhaustion from invalid tokens.
 """
 import json
 import logging
@@ -12,12 +18,17 @@ import time
 from pathlib import Path
 
 import requests
+from prometheus_client import Counter
 
 LOGGER = logging.getLogger("home_ids.alerts")
 
 _MAX_QUEUE = 50
-_MAX_RETRIES = 2
+_MAX_RETRIES = 25  # Expanded from 2 to 25 to allow ~25 minutes of dead-letter persistence
 _DEFAULT_ALERT_FILE_MAX_BYTES = 1024 * 1024 * 1024
+
+# Prometheus metrics for alerting health visibility
+alert_delivery_retries_total = Counter('ids_alert_delivery_retries_total', 'Total number of Telegram alert retries')
+alert_delivery_dropped_total = Counter('ids_alert_delivery_dropped_total', 'Total number of Telegram alerts permanently dropped')
 
 class AlertJSONWriter:
     """
@@ -144,10 +155,11 @@ class AlertManager:
         if not self.enabled or self._stop.is_set():
             return
         try:
-            self.q.put_nowait(message)
+            # Wrap message in state-aware dictionary to track retries independently
+            self.q.put_nowait({"text": message, "retries": 0})
         except queue.Full:
             LOGGER.warning("Alert queue full - message dropped")
-            pass
+            alert_delivery_dropped_total.inc()
 
     def stop(self, timeout: float = 12.0) -> None:
         self._stop.set()
@@ -159,34 +171,63 @@ class AlertManager:
     def _worker(self) -> None:
         while not self._stop.is_set():
             try:
-                msg = self.q.get(timeout=1.0)
+                payload = self.q.get(timeout=1.0)
             except queue.Empty:
                 continue
-            if msg is None:
+                
+            if payload is None:
+                self.q.task_done()
                 break
+                
             if not self.enabled:
                 self.q.task_done()
                 continue
 
-            for attempt in range(_MAX_RETRIES):
-                try:
-                    resp = requests.post(
-                        f"https://api.telegram.org/bot{self.token}/sendMessage",
-                        json={"chat_id": self.chat_id, "text": msg},
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        LOGGER.debug("Telegram alert sent successfully.")
-                        break
-                    if resp.status_code == 429:
-                        retry_after = int(resp.json().get("parameters", {}).get("retry_after", 5))
-                        LOGGER.warning("Telegram rate-limited, sleeping %ds", retry_after)
-                        self._stop.wait(timeout=min(retry_after, 30))
-                        if self._stop.is_set():
-                            break
-                    else:
-                        LOGGER.warning("Telegram returned HTTP %s", resp.status_code)
-                except requests.RequestException as exc:
-                    LOGGER.warning("Telegram attempt %d failed: %s", attempt + 1, exc)
-                    pass
+            # Backwards compatibility check in case raw strings exist in the queue
+            if isinstance(payload, str):
+                payload = {"text": payload, "retries": 0}
+
+            msg = payload["text"]
+            retries = payload["retries"]
+
+            try:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{self.token}/sendMessage",
+                    json={"chat_id": self.chat_id, "text": msg},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    LOGGER.debug("Telegram alert sent successfully.")
+                elif resp.status_code == 429:
+                    retry_after = int(resp.json().get("parameters", {}).get("retry_after", 5))
+                    LOGGER.warning("Telegram rate-limited, pausing worker for %ds", retry_after)
+                    self._stop.wait(timeout=min(retry_after, 30))
+                    raise requests.RequestException("HTTP 429 Too Many Requests")
+                else:
+                    LOGGER.warning("Telegram returned HTTP %s", resp.status_code)
+                    raise requests.RequestException(f"HTTP {resp.status_code}")
+
+            except requests.RequestException as exc:
+                retries += 1
+                LOGGER.warning("Telegram delivery failed: %s (Attempt %d/%d)", exc, retries, _MAX_RETRIES)
+                
+                if retries >= _MAX_RETRIES:
+                    LOGGER.error("CRITICAL: Alert permanently dropped after %d failed retries.", _MAX_RETRIES)
+                    alert_delivery_dropped_total.inc()
+                else:
+                    alert_delivery_retries_total.inc()
+                    # Exponential backoff (2, 4, 8, 16, 32, 60 seconds max)
+                    backoff = min(60.0, float(2 ** retries))
+                    LOGGER.debug("Worker thread backing off for %.1fs before requeueing...", backoff)
+                    
+                    # Throttle the worker pipeline natively during network outage
+                    self._stop.wait(timeout=backoff)
+                    
+                    try:
+                        payload["retries"] = retries
+                        self.q.put_nowait(payload)
+                    except queue.Full:
+                        LOGGER.error("CRITICAL: Alert queue full during requeue - message dropped.")
+                        alert_delivery_dropped_total.inc()
+                        
             self.q.task_done()

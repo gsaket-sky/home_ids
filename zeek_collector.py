@@ -7,12 +7,15 @@ RECENT FIXES:
 - Silenced unhandled JSONDecodeErrors when Zeek defaults to TSV outputs.
 - Tracked inbound lateral scans targeting internal devices accurately.
 - Hardcoded maximum mapping sizes inside all state dicts to prevent memory explosion.
+- FIXED: Wove GeoIP reverse_dns into the ingestion pipeline via a non-blocking 
+  thread pool to enrich Zeek-only devices with hostnames.
 """
 import ipaddress
 import json
 import logging
 import threading
 import time
+import concurrent.futures
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Callable, Optional
@@ -105,7 +108,6 @@ class ZeekCollector:
     def _on_event(self, event_type: str, event: dict) -> None:
         event["_zeek_type"] = event_type
         with self._lock:
-            # Memory cap local event ingest pipeline
             if len(self._events) < 10000:
                 self._events.append(event)
 
@@ -133,11 +135,10 @@ class ZeekFeatureExtractor:
     ])
     _SUSPICIOUS_PORTS = frozenset([4444, 4445, 8888, 9999, 1337, 31337, 6667, 6697, 1080, 3128])
     
-    def __init__(self, home_subnets: list = None, ti_engine=None):
+    def __init__(self, home_subnets: list = None, ti_engine=None, geoip_engine=None):
         if home_subnets is None:
             home_subnets = ["192.168.178.0/24"]
             
-        # FIX: Hardcap all dictionary values with maxlen deques to prevent memory explosion
         self._conn_counts = defaultdict(int)
         self._new_ips = defaultdict(set)
         self._ja3_hits = defaultdict(lambda: deque(maxlen=50))
@@ -152,6 +153,11 @@ class ZeekFeatureExtractor:
         self._wire_dns_resolutions = {}
         self._mac_bindings = {}
         self.ti_engine = ti_engine
+        
+        # FIX: Integrate GeoIP engine and background PTR resolution pool
+        self.geoip_engine = geoip_engine
+        self._reverse_dns_cache = {}
+        self._ptr_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="zeek_ptr")
         
         self._home_nets = []
         for net in home_subnets:
@@ -170,6 +176,27 @@ class ZeekFeatureExtractor:
         except ValueError:
             return False
 
+    def _enrich_ptr(self, ip: str) -> None:
+        """Asynchronously fetches reverse DNS for local Zeek IPs without stalling the ingest tailer."""
+        if not ip or not self._is_home_ip(ip) or ip in self._reverse_dns_cache:
+            return
+            
+        self._reverse_dns_cache[ip] = "pending"
+        
+        def _bg_lookup():
+            if not self.geoip_engine:
+                self._reverse_dns_cache[ip] = "unknown"
+                return
+            host = self.geoip_engine.reverse_dns(ip)
+            self._reverse_dns_cache[ip] = host if host else "unknown"
+            
+        self._ptr_pool.submit(_bg_lookup)
+
+    def get_hostname(self, ip: str) -> Optional[str]:
+        """Provides Zeek-discovered hostnames for devices bypassing Pi-hole."""
+        val = self._reverse_dns_cache.get(ip)
+        return val if val not in (None, "pending", "unknown") else None
+
     def ingest(self, event: dict) -> None:
         etype = event.get("_zeek_type", "")
         if etype == "dhcp":
@@ -177,11 +204,15 @@ class ZeekFeatureExtractor:
             ip = event.get("client_addr")
             if mac and ip:
                 self._mac_bindings[ip] = mac.lower()
+                self._enrich_ptr(ip)
             return
             
         src = event.get("id.orig_h", event.get("orig_h", ""))
         if not src:
             return
+            
+        # Hook Reverse DNS enrichment for the source IP
+        self._enrich_ptr(src)
             
         if etype == "conn":     
             self._process_conn(src, event)
@@ -203,17 +234,19 @@ class ZeekFeatureExtractor:
         self._conn_counts[src] += 1
         
         if dst_ip:
+            # Hook Reverse DNS enrichment for internal destination IPs
+            self._enrich_ptr(dst_ip)
+            
             # Check Outbound
             if self._is_home_ip(src) and self._is_home_ip(dst_ip):
                 if dst_port in LATERAL_PORTS:
                     self._lateral_moves[src] += 1
-            # FIX: Asymmetric inbound tracking (external hitting internal)
+            # Asymmetric inbound tracking (external hitting internal)
             elif dst_ip and self._is_home_ip(dst_ip) and not self._is_home_ip(src):
                 if dst_port in LATERAL_PORTS:
                     self._lateral_moves[dst_ip] += 1
 
             if not self._is_home_ip(src) and not self._is_home_ip(dst_ip):
-                # Cap the IP set mapping to prevent OOM DOS
                 if len(self._new_ips[src]) < 1000:
                     self._new_ips[src].add(dst_ip)
                 if (dst_ip in DOH_IPS and dst_port == 443) or dst_port == 853:
@@ -233,7 +266,6 @@ class ZeekFeatureExtractor:
             for a in answers:
                 try:
                     ipaddress.ip_address(a)
-                    # Limit dictionary cap cache sizes
                     if len(self._wire_dns_resolutions) < 20000:
                         self._wire_dns_resolutions[q] = a
                     break
@@ -314,6 +346,5 @@ class ZeekFeatureExtractor:
                   self._doh_bypass_uids, self._lateral_moves):
             d.clear()
         
-        # Clean global mappings aggressively on window roll
         if len(self._wire_dns_resolutions) > 10000:
             self._wire_dns_resolutions.clear()

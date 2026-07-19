@@ -6,13 +6,14 @@ in standard network traffic behavior that evade typical human-set heuristics.
 RECENT FIXES:
 - Enforced a strict 0.05 contamination ceiling to prevent active-infection baseline poisoning.
 - Hardened model fitting pipelines against NaN value injections.
+- FIXED: Upgraded MLRegistry to use OrderedDict for strict LRU cache eviction, preventing active models from dropping.
 """
 
 import json
 import logging
 import threading
 import time
-from collections import deque
+from collections import deque, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -259,7 +260,6 @@ class GlobalMLEngine:
                 prev_X = snap_scaler.transform(X_raw)
                 if not np.isnan(prev_X).any():
                     prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
-                    # FIX: Strict ceiling
                     contamination = float(np.clip(np.mean(prev_scores > 0.05), 0.001, 0.05))
             except Exception:
                 pass
@@ -306,7 +306,8 @@ class MLRegistry:
     def __init__(self, model_dir: Path, global_model_path: Path):
         self.model_dir = Path(model_dir)
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        self._devices = {}
+        # FIX: Ensure strict LRU evaluation by utilizing OrderedDict
+        self._devices = OrderedDict()
         self._global = GlobalMLEngine(Path(global_model_path))
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ids_ml")
@@ -318,6 +319,9 @@ class MLRegistry:
                     evict = next(iter(self._devices))
                     del self._devices[evict]
                 self._devices[device_id] = DeviceMLEngine(device_id, self.model_dir)
+            else:
+                # FIX: Push actively scored devices to the end of the queue
+                self._devices.move_to_end(device_id)
             return self._devices[device_id]
 
     def _bg_retrain(self, eng: DeviceMLEngine, samples: list) -> None:

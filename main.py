@@ -13,7 +13,11 @@ RECENT FIXES APPLIED:
 5. Grafana Sync: Aligns internal metric exports to match existing Dashboard JSON expectations.
 6. Alert Deduplication Lock: Tracks sustained attacks correctly by decoupling time elapsed from risk deltas.
 7. Geo Telemetry Sync: Repointed Geographic maps to rely purely on DNS resolutions rather than raw Zeek connections.
-8. Telegram Initialization Ping: Dispatches a startup connection test on boot.
+8. IPS Thread Capping Sync: Managed stream JSONL writer mapping explicitly passed down out of AlertJSONWriter structures.
+9. Telegram Validation: Added strict startup validation to prevent silent HTTP failures when credentials are empty.
+10. Zeek State Bridge: Wove GeoIP reverse_dns into Zeek initialization to dynamically attribute hostnames for non-DNS devices.
+11. FIXED: Shifted structural variables like baseline_alpha, device overrides, and Telegram toggle directly into the active loop. 
+    Changes to these fields now immediately cascade to the running models without a restart.
 """
 import argparse
 import sys
@@ -25,6 +29,7 @@ import time
 import threading
 import socket
 import math
+import ipaddress
 import concurrent.futures
 from collections import OrderedDict, Counter, defaultdict
 from pathlib import Path
@@ -103,7 +108,6 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
     else:
         time_idx = 1  
     
-    # 1. Primary Check: The current hour bucket has enough mature baseline data.
     if initialized and n >= 50:
         dev_cluster = PEER_CLUSTER_REGISTRY.setdefault(dev_type, {})
         feat_cluster = dev_cluster.setdefault(feature_name, {})
@@ -111,17 +115,12 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
         std_dev = math.sqrt(max(var, 1e-4))
         return max(-10.0, min(10.0, (val - mean) / std_dev))
     
-    # 2. First Fallback: If this device is new, borrow the established baseline parameters
-    # from other devices of the exact same type (e.g. comparing a new iPhone to an old iPhone).
     peer_template = PEER_CLUSTER_REGISTRY.get(dev_type, {}).get(feature_name, {}).get(time_idx)
     if peer_template:
         p_mean = peer_template["mean"]
         p_std  = math.sqrt(max(peer_template["var"], 1e-4))
         return max(-10.0, min(10.0, (val - p_mean) / p_std))
         
-    # 3. FIX - Second Fallback: Top-of-the-hour Z-Score Blindness Prevention
-    # When the clock strikes the hour, n=0. This explicitly borrows the standard 
-    # deviation from the previous hour until the current hour achieves n >= 50.
     prev_hour = 23 if hour == 0 else hour - 1
     p_mean, p_var, p_init, p_n = baseline.get_stats(prev_hour)
     if p_init and p_n >= 50:
@@ -130,7 +129,6 @@ def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type:
         
     return 0.0
 
-# Aggressive memory-capping mechanisms for DNS/Geo IP resolutions
 _GEO_CACHE = OrderedDict()
 _GEO_CACHE_MAX = 15000  
 _GEO_CACHE_TTL = 3600   
@@ -159,7 +157,6 @@ def _geo_lookup_cached(geoip_engine: GeoIPEngine, domain: str) -> tuple:
                 _GEO_CACHE.move_to_end(domain)
                 return _ip, geo
         
-        # Insert temporary blank state while resolving in background
         _GEO_CACHE[domain] = (None, _unknown_geo(), now + 30)
         _GEO_CACHE.move_to_end(domain)
         if len(_GEO_CACHE) > _GEO_CACHE_MAX:
@@ -245,10 +242,6 @@ def _drop_safe_states(states: OrderedDict, safe_ips: set, safe_host_patterns: se
             _remove_device_metric_labels(dev_id, st.hostname, st.device_type)
             states.pop(dev_id, None)
 
-# =============================================================================
-# METRIC CLEANUP TRACKING
-# Maps all device-level Gauges to ensure orphaned labels are wiped cleanly.
-# =============================================================================
 _DEVICE_GAUGES = (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
     blocked_ratio_metric, nxdomain_ratio_metric, suspicious_domains_metric,
@@ -308,7 +301,6 @@ def _evaluate_intel(
     matches = []
     checked_ips: set[str] = set()
 
-    # Phase 1: Assess raw HTTP layer calls
     for req in zeek_http_reqs:
         url_ti = ti.lookup_url(req)
         if url_ti:
@@ -322,7 +314,6 @@ def _evaluate_intel(
             })
             ti_ioc_hits_total.labels(source="threat_intel", ioc_type="url").inc()
 
-    # Phase 2: Assess raw IP destinations
     def _check_ip(ip: str, ip_ti: dict=None, ip_score: float=0.0) -> None:
         nonlocal ti_risk, abuse_risk, vt_risk, any_match
         if not ip or ip in checked_ips: return
@@ -363,7 +354,6 @@ def _evaluate_intel(
                 })
                 ti_ioc_hits_total.labels(source="virustotal", ioc_type="ip").inc()
 
-    # Phase 3: Assess DNS Routing lookups
     for domain_entry in st.rolling.domains.keys():
         entry = global_ti_cache.get(domain_entry)
         if not entry: continue
@@ -451,16 +441,23 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
 def main():
     global RUNNING
     
-    # Dynamically set log level from config.json
     log_level_str = CONFIG.get("log_level", "INFO").upper()
     numeric_level = getattr(logging, log_level_str, logging.INFO)
     logging.basicConfig(level=numeric_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    # Initialize size-capped AlertJSONWriter instance dedicated to the active IPS log stream
+    base_path = Path(CONFIG.get("alert_json_path", "alerts.json"))
+    stream_path = base_path.with_name(base_path.with_suffix("").name + "_stream.jsonl")
+    ips_stream_log = AlertJSONWriter(
+        path=str(stream_path),
+        max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
+    )
+
     # Initialize Extracted IPS Mitigation Engine
-    ips_mitigator = IPSMitigator(CONFIG)
-    ips_status_metric.set(1.0 if ips_mitigator.enabled else 0.0)
+    ips_mitigator = IPSMitigator(CONFIG, stream_writer=ips_stream_log)
+    ips_status_metric.set(1.0 if CONFIG.get("ips_enabled", False) else 0.0)
 
     _safe_ips = set(CONFIG.get("safe_ips", ["127.0.0.1"]))
     _safe_host_patterns = _safe_pattern_set(CONFIG.get("safe_host_patterns", []))
@@ -489,11 +486,18 @@ def main():
         geoip_engine.reader = None
         geoip_engine.asn_reader = None
     
-    # Priority: Env variables (mapped via config) -> JSON file -> Fallback empty
-    tg_token = CONFIG.get("telegram_token", "")
-    tg_chat  = CONFIG.get("telegram_chat_id", "")
-    _tg_enabled  = (CONFIG.get("telegram_enabled", False) or (bool(tg_token) and bool(tg_chat)))
+    tg_token = str(CONFIG.get("telegram_token", "")).strip()
+    tg_chat  = str(CONFIG.get("telegram_chat_id", "")).strip()
+    _tg_requested = CONFIG.get("telegram_enabled", False)
     
+    if _tg_requested and (not tg_token or not tg_chat):
+        LOGGER.error("❌ [ALERTS] MISCONFIGURATION: 'telegram_enabled' is True, but 'telegram_token' or 'telegram_chat_id' is missing. Alerts DISABLED.")
+        _tg_enabled = False
+    elif tg_token and tg_chat:
+        _tg_enabled = True
+    else:
+        _tg_enabled = False
+
     alerts = AlertManager(
         token   = tg_token if _tg_enabled else "",
         chat_id = tg_chat if _tg_enabled else "",
@@ -504,17 +508,14 @@ def main():
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
     
-    # -------------------------------------------------------------------------
-    # NEW FEATURE: Telegram Initialization Ping
-    # Dispatches an immediate verification message to ensure networking is active
-    # -------------------------------------------------------------------------
     if _tg_enabled:
         startup_msg = "🟢 [SYSTEM] Home IDS Engine Started. Telegram alerting is active and connected."
         alerts.send(startup_msg)
-        LOGGER.info("Dispatched Telegram initialization test message.")
+        LOGGER.info("🚀 [ALERTS] Dispatched Telegram initialization test message.")
+    else:
+        LOGGER.info("ℹ️ [ALERTS] Telegram notifications are explicitly disabled or unconfigured.")
     
-    _alpha = float(CONFIG.get("baseline_alpha", 0.05))
-    states = load_states(CONFIG.get("state_path", "state/ids_state.json"), alpha=_alpha)
+    states = load_states(CONFIG.get("state_path", "state/ids_state.json"), alpha=float(CONFIG.get("baseline_alpha", 0.05)))
 
     ti = ThreatIntel(
         cache_dir        = str(Path(CONFIG.get("state_path", "state/ids_state.json")).parent / "ti_cache"),
@@ -544,7 +545,7 @@ def main():
     )
     
     home_subnets = CONFIG.get("home_subnets", [CONFIG.get("home_subnet", "192.168.178.0/24")])
-    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti)
+    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti, geoip_engine=geoip_engine)
     
     start_http_server(int(CONFIG.get("metrics_port", 9105)))
 
@@ -567,23 +568,35 @@ def main():
     _last_save = time.time()
     _last_zeek_reset = time.time()
     total_events_processed = 0
-    _type_overrides = CONFIG.get("device_type_overrides", {})
 
     while RUNNING:
         loop_start = time.time()
         try:
-            # 1. Acquire network data batches
+            # FIX: Execute dynamic configuration polls per-loop 
+            _alpha = float(CONFIG.get("baseline_alpha", 0.05))
+            _type_overrides = CONFIG.get("device_type_overrides", {})
+            
+            # Dynamic Telegram enablement
+            if tg_token and tg_chat:
+                alerts.enabled = CONFIG.get("telegram_enabled", False)
+                
             rows = collector.poll()
             zeek_events = list(zeek.poll())
             
             zeek_status_metric.set(1.0 if zeek.available else 0.0)
             zeek_events_processed_metric.inc(len(zeek_events))
 
-            # 2. Ingest low-level packet data
+            active_zeek_ips = set()
             for zeek_event in zeek_events:
                 zeek_fx.ingest(zeek_event)
+                src = zeek_event.get("id.orig_h", zeek_event.get("orig_h", ""))
+                if src:
+                    try:
+                        if ipaddress.ip_address(src).is_private:
+                            active_zeek_ips.add(src)
+                    except ValueError:
+                        pass
 
-            # Define temporary containers for DNS-based Geolocation sync
             current_cycle_dns_ips = Counter()
             current_cycle_dns_devices = defaultdict(set)
 
@@ -592,7 +605,6 @@ def main():
             total_events_processed += batch_size
             events_processed_metric.inc(batch_size)
 
-            # 3. Synchronize Routing State
             if rows:
                 collector_lag_metric.set(max(0.0, now - rows[-1]["timestamp"]))
 
@@ -619,7 +631,6 @@ def main():
                         st.hostname  = hostname
                         _apply_device_type(st, dev_id, _type_overrides)
                         
-                        # Scrub abandoned metrics when metadata shifts
                         if old_hostname != st.hostname or old_device_type != st.device_type:
                             _remove_device_metric_labels(dev_id, old_hostname, old_device_type)
 
@@ -633,8 +644,6 @@ def main():
                         if status in KNOWN_BLOCKED: st.rolling.blocked += 1
                         if status in KNOWN_NXDOMAIN: st.rolling.nxdomain += 1
 
-                        # FIX: Source Geo metrics directly from DNS lookups instead of Zeek connections.
-                        # This aligns the backend Prometheus metrics exactly to the "DNS Query Rate" Grafana panels.
                         resolved_ip = zeek_fx.get_wire_ip(domain)
                         if not resolved_ip:
                             resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain)
@@ -658,6 +667,31 @@ def main():
             else:
                 collector_lag_metric.set(0.0)
 
+            if active_zeek_ips:
+                with STATE_LOCK:
+                    for client_ip in active_zeek_ips:
+                        mac_addr = zeek_fx.get_mac(client_ip)
+                        dev_id   = stable_device_id(mac_addr) if mac_addr else stable_device_id(client_ip)
+
+                        if dev_id not in states:
+                            hostname = zeek_fx.get_hostname(client_ip) or "unknown"
+                            states[dev_id] = DeviceState(
+                                device_id = dev_id, client_ip = client_ip, hostname = hostname, alpha = _alpha
+                            )
+                            trim_states(states)
+                        
+                        st = states[dev_id]
+                        st.mac_address = mac_addr
+                        
+                        current_host = st.hostname
+                        if current_host == "unknown":
+                            resolved_host = zeek_fx.get_hostname(client_ip)
+                            if resolved_host and resolved_host != "unknown":
+                                old_device_type = st.device_type
+                                st.hostname = resolved_host
+                                _apply_device_type(st, dev_id, _type_overrides)
+                                _remove_device_metric_labels(dev_id, current_host, old_device_type)
+
             with STATE_LOCK:
                 active_devices = list(states.items())
 
@@ -665,6 +699,16 @@ def main():
             global_device_tracking = defaultdict(set)
             
             for dev_id, st in active_devices:
+                # FIX: Actively apply the dynamic baseline alpha to existing device structures
+                st.rate_baseline.alpha = _alpha
+                st.entropy_baseline.alpha = _alpha
+                st.unique_baseline.alpha = _alpha
+                st.nxdomain_baseline.alpha = _alpha
+                st.blocked_baseline.alpha = _alpha
+                st.dga_baseline.alpha = _alpha
+                st.risk_baseline.alpha = _alpha
+                st.outbound_bytes_baseline.alpha = _alpha
+                
                 for d, c in st.rolling.domains.items():
                     global_domain_counts[d] += c
                     global_device_tracking[d].add(dev_id)
@@ -699,7 +743,6 @@ def main():
                 unique_geos[dim_qpm]["ips"].add(ip)
                 unique_geos[dim_qpm]["devices"].update(current_cycle_dns_devices[ip])
 
-            # 4. Feature Extraction & AI Scoring
             for dev_id, st in active_devices:
                 if _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns):
                     safe_device_metric.labels(str(dev_id), str(st.hostname), str(st.device_type)).set(1.0)
@@ -711,7 +754,9 @@ def main():
                 current_hour = time.localtime(now).tm_hour
                 with STATE_LOCK:
                     feats = extractor.compute(st, now, int(CONFIG.get("window_seconds", 300)))
-                if feats["total"] == 0: continue
+                    
+                if feats["total"] == 0 and not zeek_fx.get_dest_ips(st.client_ip):
+                    continue
 
                 feats["current_hour"] = current_hour
                 top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None) if st.rolling.domains else None
@@ -735,8 +780,7 @@ def main():
                 feats["dga_z"]      = feats["suspicious_domains_z"]
 
                 std_dev_multiplier = float(CONFIG.get("threshold_std_dev", 3.0))
-                device_overrides = CONFIG.get("per_device_thresholds", {})
-                device_multiplier = device_overrides.get(st.client_ip, std_dev_multiplier)
+                device_multiplier = _type_overrides.get(st.client_ip, std_dev_multiplier)
 
                 mean, var, init, n = st.rate_baseline.get_stats(current_hour)
                 current_threshold_limit = mean + (device_multiplier * math.sqrt(max(var, 1e-4))) if (init and n >= 50) else 0.0
@@ -753,7 +797,6 @@ def main():
                     risk_details = scorer.explain(feats, st, ml_score, zeek_alerts=zeek_alerts)
                     risk_score   = risk_details["risk"]
 
-                # Day-Zero Freezing Logic
                 is_poisoned = (
                     risk_score >= 7.0 or ti_match == 1 or feats.get("zeek_ja3_malicious", 0) > 0 or
                     feats.get("zeek_doh_bypass", 0) > 0 or feats.get("zeek_lateral_moves", 0) > 0
@@ -765,8 +808,6 @@ def main():
                     LOGGER.warning("SEVERE ANOMALY/THREAT DETECTED on %s (%s). Freezing baseline.", st.hostname, st.client_ip)
                 else:
                     with STATE_LOCK:
-                        # FIX: Only update structural baselines once per rolling window
-                        # Prevents standard deviation variance collapse and restores the true 24-hour probation curve.
                         window_sec = int(CONFIG.get("window_seconds", 300))
                         if now - getattr(st, "last_baseline_update", 0) >= window_sec:
                             st.rate_baseline.update(feats["query_rate"], current_hour)
@@ -788,16 +829,13 @@ def main():
                 rmean, rvar, rinit, rn = st.risk_baseline.get_stats(current_hour)
                 risk_velocity = max(-10.0, min(10.0, (risk_score - rmean) / math.sqrt(max(rvar, 1e-4)))) if (rinit and rn >= 50) else 0.0
 
-                # 5. Prometheus Export Mappings
                 str_dev_id = str(dev_id)
                 str_host = str(st.hostname)
                 str_type = str(st.device_type)
 
-                # SYNC FIX: Explicit mapping to Grafana Dashboard variable queries
                 ti_risk_metric.labels(str_dev_id, str_host, str_type).set(ti_risk)
                 ti_match_metric.labels(str_dev_id, str_host, str_type).set(ti_match)
                 
-                # Match to Grafana Dashboard expectation keys implicitly here without breaking `metrics.py` definitions
                 ndr_doh_bypass_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_doh_bypass", 0))
                 ndr_lateral_moves_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_lateral_moves", 0))
                 ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
@@ -847,9 +885,6 @@ def main():
                 rate_baseline_n = sum(getattr(st.rate_baseline, "n", [0, 0]))
                 probation_status_metric.labels(str_dev_id, str_host, str_type).set(1.0 if rate_baseline_n < 288 else 0.0)
 
-                # =====================================================================
-                # 6. ALERT GENERATION & DEDUPLICATION LOGIC
-                # =====================================================================
                 alert_threshold = float(CONFIG.get("alert_threshold", 6.0))
                 if risk_score >= alert_threshold:
                     factors = risk_details.get("factors", [])
@@ -857,9 +892,6 @@ def main():
                     risk_delta = abs(risk_score - getattr(st, "last_alert_risk", 0.0))
                     time_elapsed = now - getattr(st, "last_alert_time", 0.0)
                     
-                    # FIX: Sustained Threat & Escalation Tracking
-                    # 1. Sustained: Re-alert every 5 minutes if risk remains above threshold.
-                    # 2. Escalation: Alert if risk jumps by 1.0+ or signature changes (debounced by 60s to prevent spam).
                     if time_elapsed > 300 or (time_elapsed > 60 and (risk_delta >= 1.0 or sig != getattr(st, "last_alert_signature", ""))):
                         LOGGER.info("Alert generated for %s: %s (Risk: %.2f)", st.hostname, sig, risk_score)
                         st.last_alert_time = now
@@ -877,7 +909,6 @@ def main():
                         st.last_alert_risk = 0.0
                         st.last_alert_signature = ""
 
-            # FIX: Only reset Zeek features once every rolling window (300s) to allow proper aggregation
             if now - _last_zeek_reset >= int(CONFIG.get("window_seconds", 300)):
                 zeek_fx.reset_all()
                 _last_zeek_reset = now

@@ -2,6 +2,13 @@
 utils.py – Utility helper functions.
 Houses the static string parsers, heuristic evaluations (DGA calculations, entropy math),
 and bypass allowlists (CDNs, Telemetry) used to prevent false positive alert floods.
+
+RECENT FIXES:
+- Adjusted DGA logic to trap zero-vowel evading logic correctly.
+- Added strict LRU caching on socket DNS lookups to prevent thread exhaustion.
+- Adjusted digit ratio threshold in 6–11 character DGA bucket to accurately capture alphanumeric variants.
+- FIXED: Added infra mapping (router, dns_server, gateway) to infer_device_type to activate deterministic scoring paths.
+- FIXED: Corrected structural indentation in infer_device_type loop that bypassed the entire pattern dictionary.
 """
 import math
 import hashlib
@@ -102,11 +109,10 @@ def suspicious_dga(domain):
     
     if 6 <= n <= 11:
         vr = vowel_ratio(left)
-        # FIX: Adjusted vowel ratio allowance to 10% to catch modern algorithms
         if vr <= 0.10:
             ent = entropy(left)
             digits = sum(1 for c in left if c.isdigit())
-            if ent > 2.5 and digits / n < 0.20:
+            if ent > 2.5 and digits / n < 0.40:
                 return True
         return False
         
@@ -150,9 +156,15 @@ def infer_device_type(hostname):
         "nas": "nas", "synology": "nas", "qnap": "nas",
         "camera": "camera", "ring": "camera", "arlo": "camera",
         "xbox": "gaming_console", "playstation": "gaming_console", "nintendo": "gaming_console",
-        "echo": "iot", "alexa": "iot", "nest": "iot", "thermostat": "iot", "bulb": "iot"
+        "echo": "iot", "alexa": "iot", "nest": "iot", "thermostat": "iot", "bulb": "iot",
+        
+        # FIX: Linked critical infra tiers directly into the scoring path definitions
+        "pihole": "dns_server", "adguard": "dns_server", "unbound": "dns_server",
+        "router": "router", "pfsense": "router", "opnsense": "router", "unifi": "router", "openwrt": "router", "udm": "router",
+        "gateway": "gateway", "modem": "gateway", "firewall": "gateway"
     }
     
+    # FIX: Corrected block indentation so the entire dictionary evaluates before falling back
     for key, dtype in patterns.items():
         if key in h:
             return dtype

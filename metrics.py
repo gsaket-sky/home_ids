@@ -3,6 +3,9 @@ metrics.py - Prometheus metrics registry for Home IDS.
 
 Centralizes all telemetry definitions to ensure consistent label structures 
 and decouple metrics formatting from the main processing loop.
+
+RECENT FIXES:
+- Removed orphaned per_device_threshold_metric variable.
 """
 from prometheus_client import Gauge, Counter
 
@@ -76,7 +79,6 @@ ti_ioc_hits_total = Counter("home_ids_ti_ioc_hits_total", "Total IOC matches fro
 safe_device_metric = Gauge("home_ids_safe_device", "Device is on the safe list", _DEV_LABELS)
 probation_status_metric = Gauge("home_ids_probation_status", "Device is in cold-start probation", _DEV_LABELS)
 baseline_poisoned_metric = Gauge("home_ids_baseline_poisoned", "Baseline update frozen this cycle due to an active threat/anomaly signal", _DEV_LABELS)
-per_device_threshold_metric = Gauge("home_ids_per_device_threshold", "DEAD/DUPLICATE metric.", _DEV_LABELS)
 zeek_conn_count_metric = Gauge("home_ids_zeek_conn_count", "Total TCP/UDP connections seen by Zeek", _DEV_LABELS)
 zeek_new_ips_metric = Gauge("home_ids_zeek_new_ips", "Unique destination IPs seen via Zeek", _DEV_LABELS)
 zeek_ja3_metric = Gauge("home_ids_zeek_ja3_malicious", "Malicious JA3 TLS fingerprint hits", _DEV_LABELS)

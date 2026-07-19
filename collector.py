@@ -3,6 +3,10 @@ collector.py – Pi-hole FTL database collector.
 
 Hooks safely into Pi-hole's SQLite database to stream queries in near real-time
 without creating file locks or interrupting the main Pi-hole FTL engine.
+
+RECENT FIXES:
+- Decoupled hostname caching into a dynamic TTL refresh loop to prevent 
+  attribution failures and IPS bypasses caused by network DHCP churn.
 """
 
 import logging
@@ -22,7 +26,27 @@ class PiHoleCollector:
         self._conn = None
         self.last_id = 0
         self._hostnames = {}
+        
+        # FIX: Track mapping staleness to survive DHCP IP churn
+        self._last_hostname_refresh = 0.0
+        self._hostname_refresh_interval = 60.0
+        
         self._connect()
+
+    def _refresh_hostnames(self) -> None:
+        """Dynamically updates IP-to-Hostname mappings with safe atomic swaps."""
+        if not self._conn:
+            return
+        try:
+            new_hostnames = {}
+            for row in self._conn.execute("SELECT ip, name FROM network_addresses WHERE name IS NOT NULL").fetchall():
+                new_hostnames[row[0]] = row[1]
+            
+            # Atomic swap ensures zero downtime if the query fails mid-execution
+            self._hostnames = new_hostnames
+            self._last_hostname_refresh = time.time()
+        except Exception as exc:
+            LOGGER.debug("Failed to refresh Pi-hole hostnames: %s", exc)
 
     def _connect(self) -> None:
         """Connects safely using read-only mode to prevent DB locking."""
@@ -33,12 +57,8 @@ class PiHoleCollector:
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA cache_size=-8000;")
             
-            try:
-                # Cache available internal hostnames mapped to IP addresses
-                for row in self._conn.execute("SELECT ip, name FROM network_addresses WHERE name IS NOT NULL").fetchall():
-                    self._hostnames[row[0]] = row[1]
-            except Exception:
-                pass
+            # Populate initial hostname state
+            self._refresh_hostnames()
                 
             cur = self._conn.execute("SELECT MAX(id) FROM queries")
             self.last_id = max(0, (cur.fetchone()[0] or 0) - 2000)
@@ -62,6 +82,10 @@ class PiHoleCollector:
             self._reconnect()
             if self._conn is None:
                 return []
+                
+        # FIX: Ensure hostnames accurately reflect live network state
+        if time.time() - self._last_hostname_refresh > self._hostname_refresh_interval:
+            self._refresh_hostnames()
                 
         excl_params = list(self.excluded_ips)
         excl_clause = f"AND client NOT IN ({','.join('?'*len(excl_params))})" if excl_params else ""

@@ -5,8 +5,11 @@ Tracks and parses the config.json file, supplying safe defaults if the file
 does not exist, and incorporates a live background thread watcher to handle
 dynamic config reloads on the fly without daemon disruption.
 
-FIX: Fully enforces environment variable overrides natively inside the config engine.
-Modules like main.py and ips.py no longer poll os.environ directly.
+RECENT FIXES:
+- Fully enforces environment variable overrides natively inside the config engine.
+- FIXED: Added a JSON structure flattener. Allows config.json to be organized into 
+  'static_requires_restart' and 'dynamic_live_reload' blocks for user clarity, 
+  while keeping the internal Python dictionary flat for backward compatibility.
 """
 import json
 import os
@@ -28,6 +31,14 @@ _ENV_OVERRIDES = {
     "PIHOLE_API_PASSWORD":    "pihole_api_password",
     "PIHOLE_API_URL":         "pihole_api_url",
     "IDS_ROUTER_WEBHOOK_URL": "router_webhook_url",
+}
+
+_STATIC_KEYS = {
+    "metrics_port", "state_path", "model_path", "geoip_db", "geoip_asn_db", 
+    "pihole_db", "zeek_log_dir", "alert_json_path", "alert_json_max_bytes", 
+    "max_device_states", "telegram_token", "telegram_chat_id", "otx_api_key", 
+    "abuseipdb_api_key", "virustotal_api_key", "pihole_api_password", 
+    "pihole_api_url", "router_webhook_url"
 }
 
 def apply_env_overrides(config: dict) -> None:
@@ -96,20 +107,43 @@ class LiveConfig:
         if not self.file_path.exists():
             try:
                 self.file_path.parent.mkdir(parents=True, exist_ok=True)
-                self.file_path.write_text(json.dumps(self._config, indent=2))
-                LOGGER.info("Created default configuration file at %s", self.file_path)
+                
+                # Automatically generate the organized structure on first boot
+                structured = {
+                    "static_requires_restart": {},
+                    "dynamic_live_reload": {}
+                }
+                for k, v in self._config.items():
+                    if k in _STATIC_KEYS:
+                        structured["static_requires_restart"][k] = v
+                    else:
+                        structured["dynamic_live_reload"][k] = v
+                        
+                self.file_path.write_text(json.dumps(structured, indent=2))
+                LOGGER.info("Created structured default configuration file at %s", self.file_path)
             except Exception as exc:
                 LOGGER.error("Failed to create default config: %s", exc)
             return
 
         try:
             raw = json.loads(self.file_path.read_text())
+            flattened = {}
+            
+            # Flattens the new grouped structure back into a standard dictionary
+            if "static_requires_restart" in raw or "dynamic_live_reload" in raw:
+                flattened.update(raw.get("static_requires_restart", {}))
+                flattened.update(raw.get("dynamic_live_reload", {}))
+            else:
+                # Backwards compatibility fallback if the user hasn't migrated their JSON file yet
+                flattened = raw
+
             changed = {}
             with self._lock:
-                for k, v in raw.items():
-                    if k in self._config and self._config[k] != v:
-                        changed[k] = v
-                    self._config[k] = v
+                for k, v in flattened.items():
+                    if not str(k).startswith("_"):
+                        if k in self._config and self._config[k] != v:
+                            changed[k] = v
+                        self._config[k] = v
                 
                 # Enforce environment overrides over any on-disk JSON modifications
                 apply_env_overrides(self._config)
