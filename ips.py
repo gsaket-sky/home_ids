@@ -12,6 +12,7 @@ RECENT FIXES:
 - FIXED: Converted all asset configurations to dynamic runtime evaluations via the configuration engine.
 - FIXED: Added explicit initialization audit logs to warn users about missing execution targets.
 - FIXED: Log routing relies explicitly on main's size-capped AlertJSONWriter instance.
+- FIXED: Implemented a 5-minute deduplication cooldown on IPS BYPASS logs to prevent massive log spam from telemetry domains (e.g., Microsoft Teams).
 """
 import json
 import logging
@@ -44,6 +45,9 @@ class IPSMitigator:
         
         # Active Session ID Cache for v6
         self._v6_sid = None
+        
+        # ADDED: Track bypass log timestamps to prevent syslog exhaustion from safe telemetry
+        self._last_bypass_log = {}
         
         # Startup Validation Audit Log Engine
         enabled = self.config.get("ips_enabled", False)
@@ -108,7 +112,21 @@ class IPSMitigator:
             if risk_score >= 8.0 or c2_hits > 0 or dga_burst:
                 # FIX: Scoped check directly inside the DNS blocking routine
                 if str(top_domain).lower().strip() in safe_domains:
-                    LOGGER.info("🛡️ IPS BYPASS: Pi-hole block skipped for safe-listed domain: %s", top_domain)
+                    now = time.time()
+                    log_key = (str_dev_id, top_domain)
+                    last_logged = self._last_bypass_log.get(log_key, 0)
+                    
+                    # ADDED: Enforce a 300-second cooldown so telemetry skips only log once per 5 mins per device
+                    if now - last_logged >= 300:
+                        LOGGER.info("🛡️ IPS BYPASS: Pi-hole block skipped for safe-listed domain: %s (Device: %s)", top_domain, str_host)
+                        self._last_bypass_log[log_key] = now
+                        
+                    # Periodically clean up the bypass log dictionary to prevent long-term memory leaks
+                    if len(self._last_bypass_log) > 5000:
+                        cutoff = now - 3600
+                        keys_to_delete = [k for k, v in self._last_bypass_log.items() if v < cutoff]
+                        for k in keys_to_delete:
+                            del self._last_bypass_log[k]
                 else:
                     success = self._block_pihole_domain(top_domain)
                     if success:

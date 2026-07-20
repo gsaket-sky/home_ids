@@ -9,6 +9,8 @@ RECENT FIXES:
 - Hardcoded maximum mapping sizes inside all state dicts to prevent memory explosion.
 - FIXED: Wove GeoIP reverse_dns into the ingestion pipeline via a non-blocking 
   thread pool to enrich Zeek-only devices with hostnames.
+- FIXED (ARCH): Converted all static integer counters to time-aware rolling deques to eliminate 
+  the 5-minute Timing Cliff race condition between Pi-hole and Zeek events.
 """
 import ipaddress
 import json
@@ -135,20 +137,21 @@ class ZeekFeatureExtractor:
     ])
     _SUSPICIOUS_PORTS = frozenset([4444, 4445, 8888, 9999, 1337, 31337, 6667, 6697, 1080, 3128])
     
-    def __init__(self, home_subnets: list = None, ti_engine=None, geoip_engine=None):
+    def __init__(self, home_subnets: list = None, ti_engine=None, geoip_engine=None, safe_ips: set = None):
         if home_subnets is None:
             home_subnets = ["192.168.178.0/24"]
             
-        self._conn_counts = defaultdict(int)
-        self._new_ips = defaultdict(set)
-        self._ja3_hits = defaultdict(lambda: deque(maxlen=50))
-        self._http_uas = defaultdict(set)
-        self._notices = defaultdict(lambda: deque(maxlen=50))
-        self._susp_ports = defaultdict(int)
-        self._http_reqs = defaultdict(set)
-        self._outbound_bytes = defaultdict(int)
-        self._doh_bypass_uids = defaultdict(set)
-        self._lateral_moves = defaultdict(int)
+        # FIX 1: Converted static int counters to time-aware rolling windows for smooth decay
+        self._conn_ts = defaultdict(lambda: deque(maxlen=5000))
+        self._new_ips = defaultdict(dict)
+        self._ja3_hits = defaultdict(lambda: deque(maxlen=100))
+        self._http_uas = defaultdict(dict)
+        self._notices = defaultdict(lambda: deque(maxlen=100))
+        self._susp_ports = defaultdict(lambda: deque(maxlen=500))
+        self._http_reqs = defaultdict(dict)
+        self._outbound_bytes = defaultdict(lambda: deque(maxlen=5000))
+        self._doh_bypass_uids = defaultdict(dict)
+        self._lateral_moves = defaultdict(lambda: deque(maxlen=500))
         
         self._wire_dns_resolutions = {}
         self._mac_bindings = {}
@@ -159,6 +162,9 @@ class ZeekFeatureExtractor:
         self._reverse_dns_cache = {}
         self._ptr_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="zeek_ptr")
         
+        # ADDED: Store reference to safe_ips set for lateral movement exemption
+        self.safe_ips = safe_ips if safe_ips is not None else set()
+
         self._home_nets = []
         for net in home_subnets:
             if net:
@@ -194,8 +200,54 @@ class ZeekFeatureExtractor:
 
     def get_hostname(self, ip: str) -> Optional[str]:
         """Provides Zeek-discovered hostnames for devices bypassing Pi-hole."""
-        val = self._reverse_dns_cache.get(ip)
-        return val if val not in (None, "pending", "unknown") else None
+        return self._reverse_dns_cache.get(ip) if self._reverse_dns_cache.get(ip) not in (None, "pending", "unknown") else None
+
+    def prune(self, now_ts: float, window: int) -> None:
+        """FIX 1: Dynamically ages out old Zeek events to prevent hard-reset timing cliffs."""
+        cutoff = now_ts - window
+        
+        def prune_deque(dq):
+            while dq and dq[0] < cutoff: dq.popleft()
+            
+        def prune_tuple_deque(dq):
+            while dq and dq[0][0] < cutoff: dq.popleft()
+            
+        def prune_dict(d):
+            for k in list(d.keys()):
+                if d[k] < cutoff: del d[k]
+
+        for src in list(self._conn_ts.keys()):
+            prune_deque(self._conn_ts[src])
+            if not self._conn_ts[src]: del self._conn_ts[src]
+
+        for src in list(self._lateral_moves.keys()):
+            prune_deque(self._lateral_moves[src])
+            
+        for src in list(self._susp_ports.keys()):
+            prune_deque(self._susp_ports[src])
+            
+        for src in list(self._outbound_bytes.keys()):
+            prune_tuple_deque(self._outbound_bytes[src])
+
+        for src in list(self._new_ips.keys()):
+            prune_dict(self._new_ips[src])
+
+        for src in list(self._doh_bypass_uids.keys()):
+            prune_dict(self._doh_bypass_uids[src])
+
+        for src in list(self._http_uas.keys()):
+            prune_dict(self._http_uas[src])
+
+        for src in list(self._http_reqs.keys()):
+            prune_dict(self._http_reqs[src])
+
+        for src in list(self._ja3_hits.keys()):
+            while self._ja3_hits[src] and self._ja3_hits[src][0].get("ts", 0) < cutoff:
+                self._ja3_hits[src].popleft()
+
+        for src in list(self._notices.keys()):
+            while self._notices[src] and self._notices[src][0].get("ts", 0) < cutoff:
+                self._notices[src].popleft()
 
     def ingest(self, event: dict) -> None:
         etype = event.get("_zeek_type", "")
@@ -211,7 +263,6 @@ class ZeekFeatureExtractor:
         if not src:
             return
             
-        # Hook Reverse DNS enrichment for the source IP
         self._enrich_ptr(src)
             
         if etype == "conn":     
@@ -231,32 +282,33 @@ class ZeekFeatureExtractor:
         dst_port = int(ev.get("id.resp_p", ev.get("resp_p", 0)) or 0)
         dst_ip = ev.get("id.resp_h", ev.get("resp_h", ""))
         uid = ev.get("uid", "")
-        self._conn_counts[src] += 1
+        ts = ev.get("ts", time.time())
+        
+        self._conn_ts[src].append(ts)
         
         if dst_ip:
-            # Hook Reverse DNS enrichment for internal destination IPs
             self._enrich_ptr(dst_ip)
-            
-            # Check Outbound
             if self._is_home_ip(src) and self._is_home_ip(dst_ip):
                 if dst_port in LATERAL_PORTS:
-                    self._lateral_moves[src] += 1
-            # Asymmetric inbound tracking (external hitting internal)
+                    # Skip counting lateral moves if connecting to/from a whitelisted safe server IP
+                    if dst_ip not in self.safe_ips and src not in self.safe_ips:
+                        self._lateral_moves[src].append(ts)
             elif dst_ip and self._is_home_ip(dst_ip) and not self._is_home_ip(src):
                 if dst_port in LATERAL_PORTS:
-                    self._lateral_moves[dst_ip] += 1
+                    if dst_ip not in self.safe_ips:
+                        self._lateral_moves[dst_ip].append(ts)
 
             if not self._is_home_ip(src) and not self._is_home_ip(dst_ip):
                 if len(self._new_ips[src]) < 1000:
-                    self._new_ips[src].add(dst_ip)
+                    self._new_ips[src][dst_ip] = ts
                 if (dst_ip in DOH_IPS and dst_port == 443) or dst_port == 853:
                     if len(self._doh_bypass_uids[src]) < 100:
-                        self._doh_bypass_uids[src].add(uid)
+                        self._doh_bypass_uids[src][uid] = ts
                     
         if dst_port in self._SUSPICIOUS_PORTS:
-            self._susp_ports[src] += 1
+            self._susp_ports[src].append(ts)
             
-        self._outbound_bytes[src] += int(ev.get("orig_bytes", 0) or 0)
+        self._outbound_bytes[src].append((ts, int(ev.get("orig_bytes", 0) or 0)))
 
     def _process_dns(self, ev: dict) -> None:
         query = ev.get("query")
@@ -279,13 +331,14 @@ class ZeekFeatureExtractor:
         return self._mac_bindings.get(ip)
 
     def get_http_reqs(self, device_ip: str) -> set:
-        return set(self._http_reqs.get(device_ip, set()))
+        return set(self._http_reqs.get(device_ip, {}).keys())
 
     def get_dest_ips(self, device_ip: str) -> set:
-        return set(self._new_ips.get(device_ip, set()))
+        return set(self._new_ips.get(device_ip, {}).keys())
 
     def _process_ssl(self, src: str, ev: dict) -> None:
         ja3 = ev.get("ja3", "")
+        ts = ev.get("ts", time.time())
         is_malicious = False
         if ja3:
             if ja3 in self._MALICIOUS_JA3:
@@ -294,57 +347,61 @@ class ZeekFeatureExtractor:
                 is_malicious = True
                 
         if is_malicious:
+            dst_port = ev.get("id.resp_p", ev.get("resp_p", 0)) 
             self._ja3_hits[src].append({
                 "ja3": ja3,
                 "server": ev.get("server_name", ""),
-                "ts": ev.get("ts", time.time())
+                "ts": ts,
+                "dest_port": dst_port 
             })
             
         if str(ev.get("server_name", "")).lower() in DOH_SNIS:
             if len(self._doh_bypass_uids[src]) < 100:
-                self._doh_bypass_uids[src].add(ev.get("uid", ""))
+                self._doh_bypass_uids[src][ev.get("uid", "")] = ts
 
     def _process_http(self, src: str, ev: dict) -> None:
         ua = ev.get("user_agent", "")
         host = ev.get("host", "")
         uri = ev.get("uri", "")
+        ts = ev.get("ts", time.time())
         if ua and len(self._http_uas[src]) < 500:
-            self._http_uas[src].add(ua)
+            self._http_uas[src][ua] = ts
         if host and uri and len(self._http_reqs[src]) < 1000:
-            self._http_reqs[src].add(f"{host}{uri}")
+            self._http_reqs[src][f"{host}{uri}"] = ts
 
     def _process_notice(self, src: str, ev: dict) -> None:
-        self._notices[src].append({"note": ev.get("note", ""), "msg": ev.get("msg", ""), "ts": ev.get("ts")})
+        dst_port = ev.get("id.resp_p", ev.get("resp_p", 0)) 
+        self._notices[src].append({"note": ev.get("note", ""), "msg": ev.get("msg", ""), "ts": ev.get("ts"), "dest_port": dst_port})
 
     def _process_weird(self, src: str, ev: dict) -> None:
-        self._notices[src].append({"note": f"weird:{ev.get('name', '')}", "msg": ev.get("addl", ""), "ts": ev.get("ts")})
+        dst_port = ev.get("id.resp_p", ev.get("resp_p", 0)) 
+        self._notices[src].append({"note": f"weird:{ev.get('name', '')}", "msg": ev.get("addl", ""), "ts": ev.get("ts"), "dest_port": dst_port})
 
     def get_features(self, device_ip: str) -> dict:
         return {
-            "zeek_conn_count": self._conn_counts.get(device_ip, 0),
-            "zeek_new_ips": len(self._new_ips.get(device_ip, set())),
+            "zeek_conn_count": len(self._conn_ts.get(device_ip, [])),
+            "zeek_new_ips": len(self._new_ips.get(device_ip, {})),
             "zeek_ja3_malicious": len(self._ja3_hits.get(device_ip, [])),
             "zeek_notices": len(self._notices.get(device_ip, [])),
-            "zeek_susp_ports": self._susp_ports.get(device_ip, 0),
-            "zeek_http_ua_count": len(self._http_uas.get(device_ip, set())),
-            "zeek_outbound_bytes": self._outbound_bytes.get(device_ip, 0),
-            "zeek_doh_bypass": len(self._doh_bypass_uids.get(device_ip, set())),
-            "zeek_lateral_moves": self._lateral_moves.get(device_ip, 0)
+            "zeek_susp_ports": len(self._susp_ports.get(device_ip, [])),
+            "zeek_http_ua_count": len(self._http_uas.get(device_ip, {})),
+            "zeek_outbound_bytes": sum(b for t, b in self._outbound_bytes.get(device_ip, [])),
+            "zeek_doh_bypass": len(self._doh_bypass_uids.get(device_ip, {})),
+            "zeek_lateral_moves": len(self._lateral_moves.get(device_ip, []))
         }
 
     def get_alerts(self, device_ip: str) -> list[dict]:
         alerts = []
         for h in self._ja3_hits.get(device_ip, []):
-            alerts.append({"type": "malicious_ja3", "ja3": h["ja3"], "confidence": 0.95})
+            alerts.append({"type": "malicious_ja3", "ja3": h["ja3"], "dest_port": h.get("dest_port", 0), "confidence": 0.95})
         for n in self._notices.get(device_ip, []):
-            alerts.append({"type": "zeek_notice", "note": n["note"], "msg": n["msg"], "confidence": 0.75})
+            alerts.append({"type": "zeek_notice", "note": n["note"], "msg": n["msg"], "dest_port": n.get("dest_port", 0), "confidence": 0.75})
         return alerts
 
     def reset_all(self) -> None:
-        for d in (self._conn_counts, self._new_ips, self._ja3_hits, self._notices, 
+        for d in (self._conn_ts, self._new_ips, self._ja3_hits, self._notices, 
                   self._susp_ports, self._http_uas, self._http_reqs, self._outbound_bytes, 
                   self._doh_bypass_uids, self._lateral_moves):
             d.clear()
-        
         if len(self._wire_dns_resolutions) > 10000:
             self._wire_dns_resolutions.clear()

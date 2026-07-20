@@ -18,6 +18,16 @@ RECENT FIXES APPLIED:
 10. Zeek State Bridge: Wove GeoIP reverse_dns into Zeek initialization to dynamically attribute hostnames for non-DNS devices.
 11. FIXED: Shifted structural variables like baseline_alpha, device overrides, and Telegram toggle directly into the active loop. 
     Changes to these fields now immediately cascade to the running models without a restart.
+12. FIXED: Passed live safe_ips set reference into ZeekFeatureExtractor to prevent SSH false positives on internal servers.
+13. ADDED: Extracted and injected top-level dest_port fields into Loki JSON alert payload formatting.
+14. FIXED: Prevented Device Identity Split (Memory Leak) between IP and MAC tracking.
+15. FIXED: Synchronized AI Baseline Updates globally with Zeek resets to prevent metric desync.
+16. FIXED: Throttled Poisoned Baseline log flood to prevent syslog exhaustion.
+17. FIXED: Corrected Risk Flapping deduplication bypass on boundary alert margins.
+18. FIXED (ARCH): Decoupled Baseline Updates from Global Zeek Reset. Devices now maintain highly accurate autonomous AI baseline timers.
+19. FIXED (ARCH): Removed Safe-Device memory purging. Safe IPs are now simulated through the entire pipeline to keep AI baselines warm, but their alerting and final Risk Scores are cleanly suppressed to 0.0.
+20. FIXED: Filtered safe_domains from top_domain selection to prevent telemetry (e.g., Microsoft Teams) from masking malicious domains. Added NoneType fallback protection for IPS string parsing.
+21. FIXED: Unified AlertJSONWriter initialization to prevent JSONDecodeError crashes caused by twin instances fighting over file structures.
 """
 import argparse
 import sys
@@ -235,13 +245,6 @@ def _is_safe_device(client_ip: str, hostname: str, safe_ips: set, safe_host_patt
         return True
     return any(pattern in host for pattern in safe_host_patterns)
 
-def _drop_safe_states(states: OrderedDict, safe_ips: set, safe_host_patterns: set) -> None:
-    """Expunges actively tracked devices if they are dynamically added to the allowlist."""
-    for dev_id, st in list(states.items()):
-        if _is_safe_device(st.client_ip, st.hostname, safe_ips, safe_host_patterns):
-            _remove_device_metric_labels(dev_id, st.hostname, st.device_type)
-            states.pop(dev_id, None)
-
 _DEVICE_GAUGES = (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
     blocked_ratio_metric, nxdomain_ratio_metric, suspicious_domains_metric,
@@ -419,6 +422,9 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
                          risk_details: dict, feats: dict, ml_score: float,
                          ti_matches: list, zeek_alerts: list) -> dict:
     """Constructs the universal JSON document structure for Grafana Loki."""
+    dest_ports = [a.get("dest_port") for a in (zeek_alerts or []) if a.get("dest_port")]
+    dest_port = dest_ports[0] if dest_ports else 0
+
     return {
         "timestamp": now,
         "device": {
@@ -428,6 +434,7 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
             "type": st.device_type or "unknown",
             "mac": getattr(st, "mac_address", "unknown"),
         },
+        "dest_port": dest_port,  
         "risk": float(risk_score),
         "threshold": float(alert_threshold),
         "signature": signature,
@@ -447,16 +454,15 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # Initialize size-capped AlertJSONWriter instance dedicated to the active IPS log stream
-    base_path = Path(CONFIG.get("alert_json_path", "alerts.json"))
-    stream_path = base_path.with_name(base_path.with_suffix("").name + "_stream.jsonl")
-    ips_stream_log = AlertJSONWriter(
-        path=str(stream_path),
+    # ADDED FIX: Unified AlertJSONWriter initialization. 
+    # This single instance manages alerts.json & alerts_stream.jsonl seamlessly without file lock or parse conflict.
+    alert_log = AlertJSONWriter(
+        path=CONFIG.get("alert_json_path", "alerts.json"),
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
 
-    # Initialize Extracted IPS Mitigation Engine
-    ips_mitigator = IPSMitigator(CONFIG, stream_writer=ips_stream_log)
+    # Initialize Extracted IPS Mitigation Engine using the shared writer
+    ips_mitigator = IPSMitigator(CONFIG, stream_writer=alert_log)
     ips_status_metric.set(1.0 if CONFIG.get("ips_enabled", False) else 0.0)
 
     _safe_ips = set(CONFIG.get("safe_ips", ["127.0.0.1"]))
@@ -503,10 +509,6 @@ def main():
         chat_id = tg_chat if _tg_enabled else "",
         enabled = _tg_enabled,
     )
-    alert_log = AlertJSONWriter(
-        path=CONFIG.get("alert_json_path", "alerts.json"),
-        max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
-    )
     
     if _tg_enabled:
         startup_msg = "🟢 [SYSTEM] Home IDS Engine Started. Telegram alerting is active and connected."
@@ -545,7 +547,7 @@ def main():
     )
     
     home_subnets = CONFIG.get("home_subnets", [CONFIG.get("home_subnet", "192.168.178.0/24")])
-    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti, geoip_engine=geoip_engine)
+    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti, geoip_engine=geoip_engine, safe_ips=_safe_ips)
     
     start_http_server(int(CONFIG.get("metrics_port", 9105)))
 
@@ -558,25 +560,20 @@ def main():
             _safe_host_patterns.update(_safe_pattern_set(CONFIG.get("safe_host_patterns", [])))
             collector.excluded_ips = set(_safe_ips)
             collector.excluded_patterns = set(_safe_host_patterns)
-            with STATE_LOCK:
-                _drop_safe_states(states, _safe_ips, _safe_host_patterns)
 
     CONFIG.set_notify(_on_config_change)
     CONFIG.start_watcher(interval=5.0)
 
     _save_interval = 300
     _last_save = time.time()
-    _last_zeek_reset = time.time()
     total_events_processed = 0
 
     while RUNNING:
         loop_start = time.time()
         try:
-            # FIX: Execute dynamic configuration polls per-loop 
             _alpha = float(CONFIG.get("baseline_alpha", 0.05))
             _type_overrides = CONFIG.get("device_type_overrides", {})
             
-            # Dynamic Telegram enablement
             if tg_token and tg_chat:
                 alerts.enabled = CONFIG.get("telegram_enabled", False)
                 
@@ -604,7 +601,7 @@ def main():
             batch_size = len(rows)
             total_events_processed += batch_size
             events_processed_metric.inc(batch_size)
-
+            
             if rows:
                 collector_lag_metric.set(max(0.0, now - rows[-1]["timestamp"]))
 
@@ -615,6 +612,12 @@ def main():
                         
                         mac_addr = zeek_fx.get_mac(client_ip)
                         dev_id   = stable_device_id(mac_addr) if mac_addr else stable_device_id(client_ip)
+                        
+                        ip_dev_id = stable_device_id(client_ip)
+                        if mac_addr and dev_id != ip_dev_id and ip_dev_id in states:
+                            states[dev_id] = states.pop(ip_dev_id)
+                            states[dev_id].device_id = dev_id
+                            LOGGER.info("Migrated device state for %s from IP to MAC tracking.", client_ip)
 
                         if dev_id not in states:
                             states[dev_id] = DeviceState(
@@ -672,6 +675,12 @@ def main():
                     for client_ip in active_zeek_ips:
                         mac_addr = zeek_fx.get_mac(client_ip)
                         dev_id   = stable_device_id(mac_addr) if mac_addr else stable_device_id(client_ip)
+                        
+                        ip_dev_id = stable_device_id(client_ip)
+                        if mac_addr and dev_id != ip_dev_id and ip_dev_id in states:
+                            states[dev_id] = states.pop(ip_dev_id)
+                            states[dev_id].device_id = dev_id
+                            LOGGER.info("Migrated Zeek device state for %s from IP to MAC tracking.", client_ip)
 
                         if dev_id not in states:
                             hostname = zeek_fx.get_hostname(client_ip) or "unknown"
@@ -699,7 +708,6 @@ def main():
             global_device_tracking = defaultdict(set)
             
             for dev_id, st in active_devices:
-                # FIX: Actively apply the dynamic baseline alpha to existing device structures
                 st.rate_baseline.alpha = _alpha
                 st.entropy_baseline.alpha = _alpha
                 st.unique_baseline.alpha = _alpha
@@ -744,12 +752,11 @@ def main():
                 unique_geos[dim_qpm]["devices"].update(current_cycle_dns_devices[ip])
 
             for dev_id, st in active_devices:
-                if _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns):
+                is_safe = _is_safe_device(st.client_ip, st.hostname, _safe_ips, _safe_host_patterns)
+                if is_safe:
                     safe_device_metric.labels(str(dev_id), str(st.hostname), str(st.device_type)).set(1.0)
-                    _remove_device_metric_labels(dev_id, st.hostname, st.device_type, keep_safe_flag=True)
-                    with STATE_LOCK:
-                        states.pop(dev_id, None)
-                    continue
+                else:
+                    safe_device_metric.labels(str(dev_id), str(st.hostname), str(st.device_type)).set(0.0)
 
                 current_hour = time.localtime(now).tm_hour
                 with STATE_LOCK:
@@ -759,7 +766,14 @@ def main():
                     continue
 
                 feats["current_hour"] = current_hour
-                top_domain = max(st.rolling.domains, key=st.rolling.domains.get, default=None) if st.rolling.domains else None
+                
+                safe_domains_set = set(CONFIG.get("safe_domains", []))
+                candidate_domains = [d for d in st.rolling.domains if d not in safe_domains_set]
+                top_domain = max(candidate_domains, key=st.rolling.domains.get, default=None) if candidate_domains else None
+                
+                if not top_domain and st.rolling.domains:
+                    top_domain = max(st.rolling.domains, key=st.rolling.domains.get)
+                
                 feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
 
                 zeek_feats  = zeek_fx.get_features(st.client_ip)
@@ -797,15 +811,24 @@ def main():
                     risk_details = scorer.explain(feats, st, ml_score, zeek_alerts=zeek_alerts)
                     risk_score   = risk_details["risk"]
 
+                if is_safe:
+                    risk_score = 0.0
+                    risk_details["risk"] = 0.0
+                    ml_score = 0.0
+
                 is_poisoned = (
-                    risk_score >= 7.0 or ti_match == 1 or feats.get("zeek_ja3_malicious", 0) > 0 or
-                    feats.get("zeek_doh_bypass", 0) > 0 or feats.get("zeek_lateral_moves", 0) > 0
+                    not is_safe and (
+                        risk_score >= 7.0 or ti_match == 1 or feats.get("zeek_ja3_malicious", 0) > 0 or
+                        feats.get("zeek_doh_bypass", 0) > 0 or feats.get("zeek_lateral_moves", 0) > 0
+                    )
                 )
 
                 baseline_poisoned_metric.labels(str(dev_id), str(st.hostname), str(st.device_type)).set(1.0 if is_poisoned else 0.0)
 
                 if is_poisoned:
-                    LOGGER.warning("SEVERE ANOMALY/THREAT DETECTED on %s (%s). Freezing baseline.", st.hostname, st.client_ip)
+                    if now - getattr(st, "last_poison_log_time", 0) >= 3600:
+                        LOGGER.warning("SEVERE ANOMALY/THREAT DETECTED on %s (%s). Freezing baseline.", st.hostname, st.client_ip)
+                        st.last_poison_log_time = now
                 else:
                     with STATE_LOCK:
                         window_sec = int(CONFIG.get("window_seconds", 300))
@@ -880,8 +903,6 @@ def main():
                 deep_domains_metric.labels(str_dev_id, str_host, str_type).set(feats.get("deep_domains", 0.0))
                 nxdomain_tld_conc_metric.labels(str_dev_id, str_host, str_type).set(feats.get("nxdomain_tld_conc", 0.0))
                 
-                safe_device_metric.labels(str_dev_id, str_host, str_type).set(0.0)
-                
                 rate_baseline_n = sum(getattr(st.rate_baseline, "n", [0, 0]))
                 probation_status_metric.labels(str_dev_id, str_host, str_type).set(1.0 if rate_baseline_n < 288 else 0.0)
 
@@ -906,12 +927,11 @@ def main():
                     ips_mitigator.mitigate(st, top_domain, risk_score, c2_hits, dga_burst)
                 else:
                     if getattr(st, "last_alert_risk", 0.0) >= alert_threshold:
-                        st.last_alert_risk = 0.0
-                        st.last_alert_signature = ""
+                        if risk_score <= (alert_threshold - 1.0):
+                            st.last_alert_risk = 0.0
+                            st.last_alert_signature = ""
 
-            if now - _last_zeek_reset >= int(CONFIG.get("window_seconds", 300)):
-                zeek_fx.reset_all()
-                _last_zeek_reset = now
+            zeek_fx.prune(now, int(CONFIG.get("window_seconds", 300)))
 
             geo_country_counts = Counter()
             for dim, data in unique_geos.items():
