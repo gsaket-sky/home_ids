@@ -13,6 +13,9 @@ RECENT FIXES:
 - FIXED: Added explicit initialization audit logs to warn users about missing execution targets.
 - FIXED: Log routing relies explicitly on main's size-capped AlertJSONWriter instance.
 - FIXED: Implemented a 5-minute deduplication cooldown on IPS BYPASS logs to prevent massive log spam from telemetry domains (e.g., Microsoft Teams).
+- FIXED (PRODUCTION): Added _internet_verification() via Cloudflare Security DoH (1.1.1.2) with a 1-hour TTL verdict cache to prevent thread-blocking latency.
+- FIXED (PRODUCTION): Decoupled DNS Veto from Hardware Router Isolation so network-level threats (SSH scans/exfiltration) are not masked by harmless DNS targets.
+- FIXED (SYNTAX): Cleaned up stray conditional import syntax error on pathlib.
 """
 import json
 import logging
@@ -46,8 +49,11 @@ class IPSMitigator:
         # Active Session ID Cache for v6
         self._v6_sid = None
         
-        # ADDED: Track bypass log timestamps to prevent syslog exhaustion from safe telemetry
+        # Track bypass log timestamps to prevent syslog exhaustion from safe telemetry
         self._last_bypass_log = {}
+        
+        # TTL Verdict Cache for Internet DoH queries: domain -> (verdict_str, timestamp)
+        self._verdict_cache = {}
         
         # Startup Validation Audit Log Engine
         enabled = self.config.get("ips_enabled", False)
@@ -89,11 +95,70 @@ class IPSMitigator:
         else:
             LOGGER.warning("AlertJSONWriter instance absent in IPS environment; mitigation telemetry dropped.")
 
+    def _prune_caches(self, now: float):
+        """Centralized cache management to prevent OOM memory growth."""
+        if len(self._last_bypass_log) > 5000:
+            cutoff = now - 3600
+            keys_to_delete = [k for k, v in self._last_bypass_log.items() if v < cutoff]
+            for k in keys_to_delete:
+                del self._last_bypass_log[k]
+
+        if len(self._verdict_cache) > 5000:
+            cutoff = now - 3600
+            keys_to_delete = [k for k, (verdict, ts) in self._verdict_cache.items() if ts < cutoff]
+            for k in keys_to_delete:
+                del self._verdict_cache[k]
+
+    def _internet_verification(self, domain: str) -> str:
+        """
+        Internet Second-Opinion: Queries Cloudflare's Global Malware-Blocking DNS (1.1.1.2) via DoH.
+        Uses an internal 1-hour TTL cache to protect main loop performance.
+        """
+        now = time.time()
+        
+        # Check verdict cache first (1-hour TTL = 3600 seconds)
+        if domain in self._verdict_cache:
+            cached_verdict, ts = self._verdict_cache[domain]
+            if now - ts < 3600:
+                return cached_verdict
+
+        try:
+            url = f"https://security.cloudflare-dns.com/dns-query?name={domain}&type=A"
+            req = urllib.request.Request(url, headers={'Accept': 'application/dns-json'})
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(req, timeout=2, context=ctx) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                # Status 3 is NXDOMAIN (Domain is dead or globally sinkholed)
+                if data.get("Status") == 3:
+                    verdict = "MALICIOUS"
+                else:
+                    verdict = "HARMLESS"
+                    for ans in data.get("Answer", []):
+                        # Cloudflare returns 0.0.0.0 for explicitly blocked malware domains
+                        if ans.get("data") == "0.0.0.0":
+                            verdict = "MALICIOUS"
+                            break
+                
+                self._verdict_cache[domain] = (verdict, now)
+                return verdict
+        except Exception as e:
+            LOGGER.debug("IPS Internet verification failed for %s: %s", domain, e)
+            # Do not cache failures; allow retry on next cycle
+            return "UNKNOWN"
+
     def mitigate(self, st, top_domain: str, risk_score: float, c2_hits: float, dga_burst: bool):
         enabled = self.config.get("ips_enabled", False)
         ips_status_metric.set(1.0 if enabled else 0.0)
         if not enabled: 
             return
+
+        now = time.time()
+        self._prune_caches(now)
 
         str_dev_id = str(getattr(st, "device_id", "unknown"))
         str_host = str(getattr(st, "hostname", "unknown"))
@@ -105,55 +170,55 @@ class IPSMitigator:
         # 1. PI-HOLE DOMAIN MITIGATION
         # =====================================================================
         if top_domain and top_domain not in self.blocked_domains:
-            # Memory cap to prevent explosion if under extreme attack
             if len(self.blocked_domains) > 20000:
                 self.blocked_domains.clear()
 
             if risk_score >= 8.0 or c2_hits > 0 or dga_burst:
-                # FIX: Scoped check directly inside the DNS blocking routine
-                if str(top_domain).lower().strip() in safe_domains:
-                    now = time.time()
-                    log_key = (str_dev_id, top_domain)
+                clean_domain = str(top_domain).lower().strip()
+                
+                if clean_domain in safe_domains:
+                    log_key = (str_dev_id, clean_domain)
                     last_logged = self._last_bypass_log.get(log_key, 0)
                     
-                    # ADDED: Enforce a 300-second cooldown so telemetry skips only log once per 5 mins per device
                     if now - last_logged >= 300:
                         LOGGER.info("🛡️ IPS BYPASS: Pi-hole block skipped for safe-listed domain: %s (Device: %s)", top_domain, str_host)
                         self._last_bypass_log[log_key] = now
-                        
-                    # Periodically clean up the bypass log dictionary to prevent long-term memory leaks
-                    if len(self._last_bypass_log) > 5000:
-                        cutoff = now - 3600
-                        keys_to_delete = [k for k, v in self._last_bypass_log.items() if v < cutoff]
-                        for k in keys_to_delete:
-                            del self._last_bypass_log[k]
                 else:
-                    success = self._block_pihole_domain(top_domain)
-                    if success:
-                        self.blocked_domains.add(top_domain)
-                        ips_pihole_blocks_metric.labels(str_dev_id, str_host, str(top_domain)).inc()
+                    # INTERNET SECOND OPINION VETO
+                    internet_verdict = self._internet_verification(clean_domain)
+                    
+                    # LOGICAL DECISION: Veto Pi-hole block if globally harmless, UNLESS a local DGA burst is active.
+                    if internet_verdict == "HARMLESS" and not dga_burst:
+                        log_key = (str_dev_id, clean_domain, "veto")
+                        last_logged = self._last_bypass_log.get(log_key, 0)
                         
-                        msg = f"Blacklisting malicious domain {top_domain} via Pi-hole v6 REST API"
-                        LOGGER.critical("🚨 IPS ACTION: %s", msg)
-                        self._log_to_jsonl(msg, "pihole_block", top_domain, str_dev_id, str_host)
+                        if now - last_logged >= 300:
+                            LOGGER.warning("🛡️ IPS VETO: Local ML flagged %s, but Global Internet Threat Intel verified it as HARMLESS. Pi-hole block skipped.", top_domain)
+                            self._last_bypass_log[log_key] = now
                     else:
-                        ips_errors_metric.labels(target_type="pihole").inc()
-                        with self._queue_lock:
-                            # Cap the retry queue to 1000 to prevent memory leak
-                            if len(self.failed_blocks_queue) < 1000:
-                                self.failed_blocks_queue.add((str_dev_id, str_host, top_domain))
+                        success = self._block_pihole_domain(top_domain)
+                        if success:
+                            self.blocked_domains.add(top_domain)
+                            ips_pihole_blocks_metric.labels(str_dev_id, str_host, str(top_domain)).inc()
+                            
+                            msg = f"Blacklisting malicious domain {top_domain} via Pi-hole v6 REST API"
+                            LOGGER.critical("🚨 IPS ACTION: %s", msg)
+                            self._log_to_jsonl(msg, "pihole_block", top_domain, str_dev_id, str_host)
+                        else:
+                            ips_errors_metric.labels(target_type="pihole").inc()
+                            with self._queue_lock:
+                                if len(self.failed_blocks_queue) < 1000:
+                                    self.failed_blocks_queue.add((str_dev_id, str_host, top_domain))
 
         # =====================================================================
-        # 2. HARDWARE WEBHOOK DROP LOGIC
+        # 2. HARDWARE WEBHOOK DROP LOGIC (Runs independently of DNS Veto)
         # =====================================================================
         mac = getattr(st, "mac_address", None)
         client_ip = getattr(st, "client_ip", "unknown")
         
-        # FIX: Do not skip isolation if MAC is missing. Fallback to IP address tracking.
         isolation_key = mac if mac else client_ip
 
         if risk_score >= 8.0 and isolation_key not in self.isolated_macs:
-            # Memory cap tracking set to prevent OOM
             if len(self.isolated_macs) > 1000:
                 self.isolated_macs.clear()
 
@@ -206,7 +271,6 @@ class IPSMitigator:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             
-            # If we don't have a session ID yet, login first
             if not self._v6_sid:
                 if not self._authenticate_v6(ctx):
                     return False

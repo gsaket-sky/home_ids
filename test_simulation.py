@@ -1,7 +1,7 @@
 """
 test_simulation.py – End-to-End Logical Test Suite for Home IDS
 Simulates device lifecycles, threat injections, alert deduplication, 
-decay curves, and Zeek/Pi-hole race conditions.
+decay curves, Zeek/Pi-hole race conditions, and IPS Veto logic.
 """
 
 import time
@@ -14,8 +14,17 @@ from features import FeatureExtractor
 from scoring import RiskScorer
 from ml_engine import MLRegistry
 from zeek_collector import ZeekFeatureExtractor
+from ips import IPSMitigator
 
 logging.basicConfig(level=logging.ERROR)
+
+class DummyState:
+    """Lightweight mock state for IPS target testing."""
+    def __init__(self, device_id, hostname, ip, mac):
+        self.device_id = device_id
+        self.hostname = hostname
+        self.client_ip = ip
+        self.mac_address = mac
 
 def run_simulation():
     print("=================================================================")
@@ -47,17 +56,13 @@ def run_simulation():
     st.rate_baseline.update(10.0, 12)
     print(f"✅ Device {host} added. Initial baseline samples: {sum(st.rate_baseline.n)}")
 
-    # Step B: Dynamically add to Safe IPs & purge
+    # Step B: Dynamically add to Safe IPs (Ensuring it does NOT purge in the new architecture)
     safe_ips.add(ip)
-    if ip in safe_ips:
-        states.pop(dev_id, None)
-    print(f"✅ Device {host} added to safe_ips. State purged from memory: {dev_id not in states}")
+    print(f"✅ Device {host} added to safe_ips. State remains in memory for warm baselines: {dev_id in states}")
 
-    # Step C: Remove from Safe IPs & Re-add
+    # Step C: Remove from Safe IPs & Validate
     safe_ips.remove(ip)
-    states[dev_id] = DeviceState(device_id=dev_id, client_ip=ip, hostname=host, alpha=alpha)
-    st_readded = states[dev_id]
-    print(f"⚠️ Device {host} re-added. Re-initialized sample count: {sum(st_readded.n)} (Probation Status: Active)\n")
+    print(f"⚠️ Device {host} removed from safe_ips. Ready for active tracking.\n")
 
     # -------------------------------------------------------------------
     # TEST 2: THREAT MATRIX & ALERT DEDUPLICATION COUNTING
@@ -118,6 +123,10 @@ def run_simulation():
                     st_t.last_alert_time = c_time
                     st_t.last_alert_risk = risk
                     st_t.last_alert_signature = sig
+            else:
+                if getattr(st_t, "last_alert_risk", 0.0) >= alert_threshold:
+                    if risk <= (alert_threshold - 1.0):
+                        st_t.last_alert_risk = 0.0
 
         print(f"🎯 Threat: {name:<15} | Calculated Risk: {risk:.2f}/10.0 | Alerts Fired in 2m: {alerts_fired} (Deduplicated)")
         zeek_fx.reset_all()
@@ -157,6 +166,7 @@ def run_simulation():
     else:
         print("❌ FAILURE: Threat retained too long after traffic stopped!\n")
 
+
     # -------------------------------------------------------------------
     # TEST 4: ZEEK VS PI-HOLE RACE CONDITION & SYNC GAP
     # -------------------------------------------------------------------
@@ -170,15 +180,63 @@ def run_simulation():
     feats_before_reset = zeek_fx.get_features(sync_ip)
     print(f"⏱️  t=298s (Before Reset): Zeek JA3 Hits Captured = {feats_before_reset['zeek_ja3_malicious']}")
 
-    # System reset triggers at t=300s
-    zeek_fx.reset_all()
+    # Apply rolling prune instead of hard reset
+    zeek_fx.prune(sim_time + 300, 300)
     
     # Pi-hole logs arrive at t=301s
     feats_after_reset = zeek_fx.get_features(sync_ip)
-    print(f"⏱️  t=301s (After Reset) : Zeek JA3 Hits Captured = {feats_after_reset['zeek_ja3_malicious']}")
+    print(f"⏱️  t=301s (After Prune) : Zeek JA3 Hits Captured = {feats_after_reset['zeek_ja3_malicious']}")
 
-    if feats_before_reset['zeek_ja3_malicious'] == 1 and feats_after_reset['zeek_ja3_malicious'] == 0:
-        print("⚠️  SYNC GAP CONFIRMED: Zeek events occurring near boundary windows reset before cross-layer Pi-hole correlation occurs.")
+    if feats_after_reset['zeek_ja3_malicious'] == 1:
+        print("✅ SUCCESS: Rolling window successfully prevented the 300s Sync Gap race condition.\n")
+    else:
+        print("❌ FAILURE: Zeek events were wiped prematurely!\n")
+
+    # -------------------------------------------------------------------
+    # TEST 5: IPS CLOUDFLARE VETO & ZERO-DAY OVERRIDE
+    # -------------------------------------------------------------------
+    print("--- [TEST 5] IPS Cloudflare DoH Veto & Zero-Day DGA Override ---")
+    
+    # Initialize IPS Mitigator in Mock Mode
+    mock_config = {
+        "ips_enabled": True, 
+        "pihole_api_url": "mock", 
+        "router_webhook_url": "mock",
+        "safe_domains": ["teams.events.data.microsoft.com"]
+    }
+    ips = IPSMitigator(config=mock_config)
+    mock_st = DummyState(device_id="ips_test_01", hostname="Veto-Tester", ip="192.168.178.99", mac="AA:BB:CC:DD:EE:FF")
+
+    # Sub-Test 5A: The Harmless Veto
+    ips._internet_verification = lambda d: "HARMLESS"  # Mock Cloudflare response
+    ips.mitigate(mock_st, top_domain="github.com", risk_score=8.5, c2_hits=0, dga_burst=False)
+    if "github.com" not in ips.blocked_domains:
+        print("✅ [5A] HARMLESS VETO: Successfully aborted Pi-hole block for globally trusted domain.")
+    else:
+        print("❌ [5A] FAILURE: Harmless domain was blocked!")
+
+    # Sub-Test 5B: The Malicious Agreement
+    ips._internet_verification = lambda d: "MALICIOUS"
+    ips.mitigate(mock_st, top_domain="evil-c2-server.com", risk_score=8.5, c2_hits=0, dga_burst=False)
+    if "evil-c2-server.com" in ips.blocked_domains:
+        print("✅ [5B] MALICIOUS AGREEMENT: Successfully executed Pi-hole block for known malware.")
+    else:
+        print("❌ [5B] FAILURE: Known malware domain was not blocked!")
+
+    # Sub-Test 5C: The Zero-Day DGA Override
+    ips._internet_verification = lambda d: "HARMLESS"  # Cloudflare doesn't know about it yet
+    ips.mitigate(mock_st, top_domain="random-zeroday-dga.xyz", risk_score=9.0, c2_hits=0, dga_burst=True)
+    if "random-zeroday-dga.xyz" in ips.blocked_domains:
+        print("✅ [5C] ZERO-DAY OVERRIDE: Successfully ignored Veto and blocked active DGA burst.")
+    else:
+        print("❌ [5C] FAILURE: Zero-Day malware bypassed protection due to Veto!")
+
+    # Sub-Test 5D: Hardware Router Drop (Decoupled check)
+    if mock_st.mac_address in ips.isolated_macs:
+        print("✅ [5D] HARDWARE ISOLATION: Router webhook successfully fired regardless of DNS Veto.")
+    else:
+        print("❌ [5D] FAILURE: Router isolation failed to execute!")
+
 
     print("\n=================================================================")
     print(" 🏁 SIMULATION COMPLETE: ALL LOGIC SCENARIOS EVALUATED          ")
