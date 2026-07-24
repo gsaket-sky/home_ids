@@ -28,6 +28,8 @@ RECENT FIXES APPLIED:
 19. FIXED (ARCH): Removed Safe-Device memory purging. Safe IPs are now simulated through the entire pipeline to keep AI baselines warm, but their alerting and final Risk Scores are cleanly suppressed to 0.0.
 20. FIXED: Filtered safe_domains from top_domain selection to prevent telemetry (e.g., Microsoft Teams) from masking malicious domains. Added NoneType fallback protection for IPS string parsing.
 21. FIXED: Unified AlertJSONWriter initialization to prevent JSONDecodeError crashes caused by twin instances fighting over file structures.
+22. ADDED (FEATURE): Enhanced Telegram Alerting to include exact Queried Top Domain, Human-Readable Outbound Bytes, and chronological 20-event DNS sequence with color-coded status tags.
+23. ADDED (ENRICHMENT): Exported `ndr_tcp_scan_metric`, `ndr_max_duration_metric`, and `ndr_lateral_targets_total` to expose exact internal lateral movement target IP and port mappings in Prometheus.
 """
 import argparse
 import sys
@@ -90,7 +92,8 @@ from metrics import (
     abuseipdb_risk_metric, virustotal_risk_metric,   
     beaconing_volume_metric, jitter_cv_metric,
     zeek_status_metric, zeek_events_processed_metric,
-    ips_status_metric, ips_pihole_blocks_metric, ips_isolations_metric, ips_errors_metric 
+    ips_status_metric, ips_pihole_blocks_metric, ips_isolations_metric, ips_errors_metric,
+    ndr_tcp_scan_metric, ndr_max_duration_metric, ndr_lateral_targets_total
 )
 
 RUNNING         = True
@@ -257,7 +260,7 @@ _DEVICE_GAUGES = (
     safe_device_metric, probation_status_metric, baseline_poisoned_metric, query_rate_baseline_mean_metric,
     query_rate_threshold_limit_metric, ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
     ndr_jitter_c2_metric, ndr_exfil_z_metric, abuseipdb_risk_metric, virustotal_risk_metric,   
-    beaconing_volume_metric, jitter_cv_metric
+    beaconing_volume_metric, jitter_cv_metric, ndr_tcp_scan_metric, ndr_max_duration_metric
 )
 
 def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str, keep_safe_flag: bool = False) -> None:
@@ -397,31 +400,33 @@ def _evaluate_intel(
 
     return ti_risk, abuse_risk, vt_risk, any_match, matches
 
-def _format_alert_message(payload: dict) -> str:
-    """Formats Telegram string blocks."""
-    device = payload["device"]
-    lines = [
-        f"[ALERT] {device['hostname']} ({device['ip']}) risk {payload['risk']:.2f} / threshold {payload['threshold']:.2f}",
-        f"Device type: {device['type']} | top reason: {payload['signature']}",
-        "Factors:",
-    ]
-    for factor in payload.get("factors", []):
-        detail = f" - {factor.get('detail')}" if factor.get("detail") else ""
-        value = f" value={factor.get('value')}" if factor.get("value") not in (None, "") else ""
-        lines.append(f"- {factor.get('name')}: +{factor.get('score')}{value}{detail}")
-    matches = payload.get("threat_intel_matches", [])
-    if matches:
-        lines.append("Threat intel matches:")
-        for match in matches[:10]:
-            ioc = match.get("domain") or match.get("ip") or "unknown"
-            lines.append(f"- {match.get('provider', 'unknown')} {match.get('ioc_type')}: {ioc} ip={match.get('ip', 'unknown')} host={match.get('hostname', 'unknown')}")
-    return "\n".join(lines)[:3900]
+
+def _format_bytes(bytes_count: float) -> str:
+    """Converts raw byte counts into human-readable strings (B, KB, MB, GB)."""
+    if not bytes_count or bytes_count <= 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if abs(bytes_count) < 1024.0:
+            return f"{bytes_count:.2f} {unit}"
+        bytes_count /= 1024.0
+    return f"{bytes_count:.2f} PB"
+
+def _translate_status(status_code: int) -> str:
+    """Converts Pi-hole FTL integer status codes into human-readable visual tags."""
+    if status_code in {1, 4, 5, 6, 7, 8, 9, 10, 11}: 
+        return "🔴 BLOCKED"
+    elif status_code in {3, 12, 13, 14}: 
+        return "🟡 NXDOMAIN"
+    else:
+        return "🟢 SUCCESS"
 
 def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
                          alert_threshold: float, signature: str,
                          risk_details: dict, feats: dict, ml_score: float,
-                         ti_matches: list, zeek_alerts: list) -> dict:
-    """Constructs the universal JSON document structure for Grafana Loki."""
+                         ti_matches: list, zeek_alerts: list,
+                         top_domain: str = None, 
+                         recent_events: list = None) -> dict:
+    """Constructs the universal JSON document structure for Grafana Loki & Telegram."""
     dest_ports = [a.get("dest_port") for a in (zeek_alerts or []) if a.get("dest_port")]
     dest_port = dest_ports[0] if dest_ports else 0
 
@@ -434,7 +439,9 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
             "type": st.device_type or "unknown",
             "mac": getattr(st, "mac_address", "unknown"),
         },
-        "dest_port": dest_port,  
+        "dest_port": dest_port,
+        "top_domain": top_domain or "unknown",
+        "outbound_bytes": feats.get("zeek_outbound_bytes", 0.0),
         "risk": float(risk_score),
         "threshold": float(alert_threshold),
         "signature": signature,
@@ -443,7 +450,51 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
         "ml_score": float(ml_score),
         "threat_intel_matches": ti_matches,
         "zeek_alerts": zeek_alerts or [],
+        "dns_sequence": recent_events or []
     }
+
+def _format_alert_message(payload: dict) -> str:
+    """Formats Telegram string blocks with top domain, data volume, and DNS sequence."""
+    device = payload["device"]
+    top_domain = payload.get("top_domain", "unknown")
+    outbound_bytes = payload.get("outbound_bytes", 0.0)
+    formatted_data = _format_bytes(outbound_bytes)
+    
+    lines = [
+        f"🚨 [ALERT] {device['hostname']} ({device['ip']})",
+        f"📊 Risk: {payload['risk']:.2f} / Threshold: {payload['threshold']:.2f}",
+        f"🏷️ Device Type: {device['type']} | Reason: {payload['signature']}",
+        f"🌐 Queried Domain: {top_domain}",
+        f"📤 Outbound Data: {formatted_data}",
+        "",
+        "Factors:",
+    ]
+    
+    for factor in payload.get("factors", []):
+        detail = f" - {factor.get('detail')}" if factor.get("detail") else ""
+        value = f" value={factor.get('value')}" if factor.get("value") not in (None, "") else ""
+        lines.append(f"- {factor.get('name')}: +{factor.get('score')}{value}{detail}")
+        
+    matches = payload.get("threat_intel_matches", [])
+    if matches:
+        lines.append("\nThreat Intel Matches:")
+        for match in matches[:10]:
+            ioc = match.get("domain") or match.get("ip") or "unknown"
+            lines.append(f"- {match.get('provider', 'unknown')} {match.get('ioc_type')}: {ioc}")
+
+    events = payload.get("dns_sequence", [])
+    if events:
+        lines.append(f"\n🕒 DNS Sequence (Latest {min(len(events), 20)} queries):")
+        for ts, dom, status in events[-20:]:
+            time_str = time.strftime("%H:%M:%S", time.localtime(ts))
+            status_str = _translate_status(status)
+            lines.append(f"  {time_str} | {status_str} | {dom}")
+            
+    return "\n".join(lines)[:3900]
+
+# =====================================================================
+# MAIN ENGINE LOOP
+# =====================================================================
 
 def main():
     global RUNNING
@@ -454,14 +505,11 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # ADDED FIX: Unified AlertJSONWriter initialization. 
-    # This single instance manages alerts.json & alerts_stream.jsonl seamlessly without file lock or parse conflict.
     alert_log = AlertJSONWriter(
         path=CONFIG.get("alert_json_path", "alerts.json"),
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
 
-    # Initialize Extracted IPS Mitigation Engine using the shared writer
     ips_mitigator = IPSMitigator(CONFIG, stream_writer=alert_log)
     ips_status_metric.set(1.0 if CONFIG.get("ips_enabled", False) else 0.0)
 
@@ -864,6 +912,15 @@ def main():
                 ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
                 ndr_exfil_z_metric.labels(str_dev_id, str_host, str_type).set(feats.get("outbound_bytes_z", 0.0))
 
+                # EXPORT NEW NDR METRICS
+                ndr_tcp_scan_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_s0_rej_count", 0))
+                ndr_max_duration_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_max_duration", 0.0))
+
+                # EXPORT ENRICHED INTERNAL LATERAL TARGETS (SRC, TARGET IP, PORT)
+                new_lat_events = zeek_fx.pop_new_lateral_events(st.client_ip)
+                for dst_ip, dst_port in new_lat_events:
+                    ndr_lateral_targets_total.labels(str_dev_id, str_host, str(st.client_ip), str(dst_ip), str(dst_port)).inc()
+
                 abuseipdb_risk_metric.labels(str_dev_id, str_host, str_type).set(abuse_risk)
                 virustotal_risk_metric.labels(str_dev_id, str_host, str_type).set(vt_risk)
                 beaconing_volume_metric.labels(str_dev_id, str_host, str_type).set(feats.get("top_domain_ratio", 0.0))
@@ -919,7 +976,13 @@ def main():
                         st.last_alert_risk = risk_score
                         st.last_alert_signature = sig
                         alerts_total.inc()
-                        payload = _build_alert_payload(st, dev_id, now, risk_score, alert_threshold, sig, risk_details, feats, ml_score, ti_matches, zeek_alerts)
+                        
+                        payload = _build_alert_payload(
+                            st, dev_id, now, risk_score, alert_threshold, sig, 
+                            risk_details, feats, ml_score, ti_matches, zeek_alerts,
+                            top_domain=top_domain,
+                            recent_events=list(st.rolling.events)
+                        )
                         alert_log.write(payload)
                         alerts.send(_format_alert_message(payload))
                         

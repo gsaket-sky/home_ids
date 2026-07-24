@@ -6,28 +6,8 @@
   "refresh": "10s",
   "templating": {
     "list": [
-      {
-        "name": "PROMETHEUS_DS",
-        "type": "datasource",
-        "query": "prometheus",
-        "label": "Prometheus Source"
-      },
-      {
-        "name": "LOKI_DS",
-        "type": "datasource",
-        "query": "loki",
-        "label": "Loki Source"
-      },
-      {
-        "name": "device",
-        "type": "query",
-        "datasource": "${PROMETHEUS_DS}",
-        "query": "label_values(home_ids_risk_score, hostname)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": false,
-        "current": { "text": "All", "value": "$__all" }
-      }
+      { "name": "PROMETHEUS_DS", "type": "datasource", "query": "prometheus", "label": "Prometheus Source" },
+      { "name": "LOKI_DS", "type": "datasource", "query": "loki", "label": "Loki Source" }
     ]
   },
   "panels": [
@@ -37,7 +17,7 @@
       "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
       "options": {
         "mode": "markdown",
-        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | [📊 DNS & ML Diagnostics](/d/ids-dns-ml/tier-2-threat-id-dns-ml-diagnostics?var-device=${device}) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-ndr/tier-2-threat-id-network-lateral-zeek-ndr?var-device=${device}) | [🌍 GeoIP & OSINT Intel](/d/ids-geo/tier-2-threat-id-geoip-osint-intel?var-device=${device}) | **⚙️ Engine System Health**"
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-ultimate) | [📊 DNS & ML Diagnostics](/d/ids-tier2-dns/home-ids-tier-2-dns-ml-diagnostics) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-network-lateral-zeek-ndr) | [🌍 GeoIP & OSINT Intel](/d/ids-tier2-geo/home-ids-tier-2-geoip-osint-intel) | **⚙️ Engine System Health**"
       }
     },
     {
@@ -46,7 +26,7 @@
       "gridPos": { "h": 5, "w": 8, "x": 0, "y": 2 },
       "options": {
         "mode": "markdown",
-        "content": "#### ⏳ Database Lag & Events Ingest Velocity\n* **What this monitors:** Evaluates the synchronization speed between the Pi-hole SQLite Write-Ahead Log (WAL) transaction stream and our core Python evaluation thread.\n* **🟢 Normal State:** Lag stays strictly under 2.0 seconds. The line graph should mirror your local network traffic trends smoothly.\n* **🔴 Problem State:** If the lag begins climbing in a diagonal line, the SQLite database may be locked, or the script is experiencing compute starvation. "
+        "content": "#### ⏳ Database Lag & Events Ingest Velocity\n* **What this monitors:** Evaluates the synchronization speed between the Pi-hole and Zeek engines.\n* **🟢 Normal State:** Lag stays strictly under 2.0 seconds.\n* **🔴 Problem State:** If the lag climbs in a diagonal line, the SQLite database may be locked, or the script is experiencing compute starvation."
       }
     },
     {
@@ -67,28 +47,39 @@
     },
     {
       "type": "text",
-      "title": "📖 Analyst Field Guide: Memory Allocations & Stability Matrices",
+      "title": "📖 Analyst Field Guide: IPS Action Integrity",
       "gridPos": { "h": 5, "w": 8, "x": 0, "y": 7 },
       "options": {
         "mode": "markdown",
-        "content": "#### 🧠 Python Runtime Footprint & Stabilization\n* **What this monitors:** Tracks the actual RAM occupied by the IDS daemon process (Resident Set Size).\n* **🟢 Normal State:** A stable \"sawtooth\" pattern or a completely flat horizontal bar. This confirms that our size-capped dictionaries are successfully evicting old states and keeping RAM use constrained.\n* **🔴 Problem State:** A continuous, unmitigated upward diagonal line signifies a severe memory leak, meaning a data structure is storing parameters indefinitely without pruning."
+        "content": "#### 🛡️ Automated Mitigation Operations\n* **What this monitors:** Tracks the actual execution calls when the IDS decides to block a device.\n* **🔴 Problem State:** If IPS Action Errors rise, the script has lost API connectivity to the Pi-hole or Router Webhook, meaning it detects threats but cannot stop them."
       }
     },
     {
       "type": "timeseries",
-      "title": "IDS Engine Daemon RAM Footprint (RSS)",
-      "gridPos": { "h": 5, "w": 16, "x": 8, "y": 7 },
+      "title": "Automated IPS Action Velocity (Blocks & Isolations)",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "process_resident_memory_bytes{job=\"home_ids\"} / 1024 / 1024", "legendFormat": "Core Engine Memory Overhead" } ],
-      "fieldConfig": { "defaults": { "unit": "megabytes", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } } }
+      "targets": [
+        { "expr": "increase(home_ids_ips_pihole_blocks_total[5m])", "legendFormat": "Pi-hole API Injections" },
+        { "expr": "increase(home_ids_ips_router_isolations_total[5m])", "legendFormat": "Router Webhook Drops" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 30 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "IPS Action Errors & API Failures",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "increase(home_ids_ips_errors_total[5m])", "legendFormat": "Mitigation Faults" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] }, "custom": { "drawStyle": "bars" } } }
     },
     {
       "type": "text",
-      "title": "📖 Analyst Field Guide: Alert Delivery & Notification Pipeline Reliability",
+      "title": "📖 Analyst Field Guide: Alert Pipeline Reliability",
       "gridPos": { "h": 5, "w": 8, "x": 0, "y": 12 },
       "options": {
         "mode": "markdown",
-        "content": "#### ✉️ Notification Queue Retries & Drops\n* **What this monitors:** Validates the operational status of our out-of-band Telegram alert engine.\n* **🟢 Normal State:** The alert backlog queue sits firmly at 0. Successful alert processing increments cleanly.\n* **🔴 Problem State:** If the alert queue rises alongside metric retry ticks, the system is actively backing off due to Telegram API rate-limiting (HTTP 429) or an internet drop, preserving alerts in host RAM until connectivity recovers."
+        "content": "#### ✉️ Notification Queue Retries & Drops\n* **What this monitors:** Validates the operational status of our Telegram alert engine.\n* **🔴 Problem State:** If the alert queue rises alongside metric retry ticks, the system is actively backing off due to Telegram API rate-limiting (HTTP 429) or an internet drop."
       }
     },
     {
@@ -115,18 +106,8 @@
       "title": "🪵 Raw System Diagnostics Log Stream (Loki Integration)",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
       "datasource": "${LOKI_DS}",
-      "targets": [
-        {
-          "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | __error__=\"\"",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showLabels": false,
-        "wrapLogMessage": true,
-        "enableLogDetails": true,
-        "prettifyJSON": true
-      }
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | __error__=\"\"" } ],
+      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true, "prettifyJSON": true }
     }
   ]
 }

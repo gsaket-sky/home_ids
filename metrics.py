@@ -6,6 +6,8 @@ and decouple metrics formatting from the main processing loop.
 
 RECENT FIXES:
 - Removed orphaned per_device_threshold_metric variable.
+- ADDED (NDR): Added gauges for TCP port scans (S0/REJ) and max session durations.
+- ADDED (NDR): Added enriched counter for internal lateral movement mapping (src, dst, port).
 """
 from prometheus_client import Gauge, Counter
 
@@ -95,3 +97,10 @@ abuseipdb_risk_metric = Gauge("home_ids_abuseipdb_risk", "AbuseIPDB reputation h
 virustotal_risk_metric = Gauge("home_ids_virustotal_risk", "VirusTotal sandbox analysis hazard severity", _DEV_LABELS)
 beaconing_volume_metric = Gauge("home_ids_beaconing_volume_score", "Single-destination traffic concentration score", _DEV_LABELS)
 jitter_cv_metric = Gauge("home_ids_jitter_cv_score", "Timing uniformity coefficient of variation", _DEV_LABELS)
+
+# =============================================================================
+# NEW NDR ENRICHED METRICS
+# =============================================================================
+ndr_tcp_scan_metric = Gauge("home_ids_zeek_s0_rej_count", "Rejected or unanswered TCP connection attempts (Port Scans)", _DEV_LABELS)
+ndr_max_duration_metric = Gauge("home_ids_zeek_max_duration", "Maximum continuous connection session duration in seconds", _DEV_LABELS)
+ndr_lateral_targets_total = Counter("home_ids_zeek_lateral_targets_total", "Internal lateral movement targets broken down by source, target IP, and port", ["device", "hostname", "src_ip", "dst_ip", "dst_port"])

@@ -6,29 +6,9 @@
   "refresh": "10s",
   "templating": {
     "list": [
-      {
-        "name": "PROMETHEUS_DS",
-        "type": "datasource",
-        "query": "prometheus",
-        "label": "Prometheus Source"
-      },
-      {
-        "name": "LOKI_DS",
-        "type": "datasource",
-        "query": "loki",
-        "label": "Loki Source"
-      },
-      {
-        "name": "device",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-        "query": "label_values(home_ids_risk_score, hostname)",
-        "refresh": 1,
-        "includeAll": true,
-        "customAllValue": ".*",
-        "multi": false,
-        "current": { "text": "All", "value": ".*" }
-      }
+      { "name": "PROMETHEUS_DS", "type": "datasource", "query": "prometheus", "label": "Prometheus Source" },
+      { "name": "LOKI_DS", "type": "datasource", "query": "loki", "label": "Loki Source" },
+      { "name": "device", "type": "query", "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" }, "query": "label_values(home_ids_risk_score, hostname)", "refresh": 1, "includeAll": true, "customAllValue": ".*", "multi": false, "current": { "text": "All", "value": ".*" } }
     ]
   },
   "panels": [
@@ -39,7 +19,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | **📊 DNS & ML Diagnostics** | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-zeek-ndr?var-device=${device}) | [🌍 GeoIP & OSINT Intel](/d/ids-tier2-geo/home-ids-tier-2-geo-osint?var-device=${device}) | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-ultimate?var-device=${device}) | **📊 DNS & ML Diagnostics** | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-network-lateral-zeek-ndr?var-device=${device}) | [🌍 GeoIP & OSINT Intel](/d/ids-tier2-geo/home-ids-tier-2-geoip-osint-intel?var-device=${device}) | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
       }
     },
     {
@@ -49,7 +29,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🤖 Threat: ML Behavioral Anomalies & Risk Velocity\n**How to read this section:** The IsolationForest AI engine finds stealthy, 'living-off-the-land' attacks that keep their volume low enough to bypass human-made thresholds.\n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Abnormal / Threat:** ML Score > 0.05 means the AI detected a structural matrix shift (the pattern of traffic is fundamentally alien to that device's history). High Risk Velocity indicates the risk score shot up violently compared to its own rolling hourly average."
+        "content": "### 🤖 Threat: ML Behavioral Anomalies & Risk Velocity\n**How to read this section:** The IsolationForest AI engine tracks how a device historically behaves and flags extreme deviations. \n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Threat Hunt:** An ML Score > 0.05 means the device is acting 'out of character'. If accompanied by high Risk Velocity, the device suddenly drastically changed its behavior in the last 5 minutes. Check the Loki logs to see *which* features (like query rate or unique domains) triggered the AI."
       }
     },
     {
@@ -81,23 +61,23 @@
       "title": "🔎 Filtered Workspace: ML Mathematical Outliers (Loki)",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
       "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)ml anomaly|risk velocity\"" } ],
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | device_hostname=~\"$device\" |~ \"(?i)ml anomaly|risk velocity\"" } ],
       "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
     },
     {
       "type": "text",
-      "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 21 },
+      "title": "📖 Analyst Field Guide: DGA vs Ad-Block Noise",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 21 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🚨 Threat: Ransomware & Domain Generation Algorithms (DGA)\n**How to read this section:** Domain Generation Algorithms (DGAs) are used by ransomware and botnets to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a live command server.\n* 🟢 **Normal:** NXDOMAIN (failed lookup) ratios hover below 10%. New domains occasionally bump up when visiting new websites.\n* 🔴 **Abnormal / Threat:** A massive vertical spike in 'New Domains' and 'NXDOMAIN Ratio'. If NXDOMAIN TLD Concentration hits > 80%, the malware is hyper-focusing its guesses on a specific suffix (like `.ru` or `.cc`). Deep Domains track DNS tunneling (payload exfiltration)."
+        "content": "### 🚨 Threat: Ransomware, DGA & Evasion\n**How to hunt DGA (Domain Generation Algorithms):** Malware uses DGA to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a hidden server. \n* 🔴 **Threat Hunt:** Look for a simultaneous vertical spike in **New Domains** AND **NXDOMAIN Ratio** (failures). If NXDOMAIN TLD Concentration is > 80%, the malware is hyper-focusing its failed guesses on a specific suffix like `.ru`.\n**How to hunt Evasion (Blocked Ratio):**\n* 🟡 **Benign:** Smart TVs hitting 80% Blocked Ratio is normal ad-blocker noise. The Z-Score will be low (between -2 and +2).\n* 🔴 **Threat Hunt:** If Blocked Z-Score > 4.0, a device is wildly surging its attempts to bypass Pi-hole restrictions. Check the Loki logs to see *which* domain is being spammed."
       }
     },
     {
       "type": "timeseries",
-      "title": "New Domains (DGA Burst)",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "title": "New Domains (DGA Burst Tracker)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_new_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
@@ -105,7 +85,7 @@
     {
       "type": "timeseries",
       "title": "Suspicious / Algorithmic Domains",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
@@ -113,7 +93,7 @@
     {
       "type": "timeseries",
       "title": "Deep Domains (Tunneling Labels > 5)",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_deep_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
@@ -121,7 +101,7 @@
     {
       "type": "timeseries",
       "title": "NXDOMAIN Ratio (Lookup Failures)",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 32 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.5 } ] }, "custom": { "fillOpacity": 10 } } }
@@ -129,41 +109,49 @@
     {
       "type": "timeseries",
       "title": "NXDOMAIN TLD Concentration",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 32 },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_nxdomain_tld_concentration{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 0.7 } ] }, "custom": { "fillOpacity": 10 } } }
     },
     {
       "type": "timeseries",
-      "title": "DNS Entropy Average",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 32 },
+      "title": "Blocked Ratio (Absolute)",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_entropy_avg{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "fillOpacity": 10 } } }
+      "targets": [ { "expr": "home_ids_blocked_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.8 } ] }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Blocked Ratio Z-Score (Evasion Spike)",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 33 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "home_ids_zscore_blocked_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 4 } ] }, "custom": { "fillOpacity": 10 } } }
     },
     {
       "type": "logs",
-      "title": "🔎 Filtered Workspace: Ransomware & DGA Triage (Loki)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "title": "🔎 Filtered Workspace: Ransomware, Block Evasion & DGA (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
       "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)nxdomain ratio|blocked dns ratio|suspicious.*dga|first-seen domain burst|nxdomain tld concentration|probationary|correlated dns baseline\"" } ],
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)nxdomain ratio|blocked dns ratio|suspicious.*dga|first-seen domain burst|nxdomain tld concentration|probationary|correlated dns baseline\" | json | device_hostname=~\"$device\"" } ],
       "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
     },
     {
       "type": "text",
-      "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 48 },
+      "title": "📖 Analyst Field Guide: Adaptive Corridor",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 49 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 📈 Threat: Query Saturation & Adaptive Baselines\n**How to read this section:** The corridor chart overlays live traffic against its own established mathematical 'norm' based on the time of day.\n* 🟢 **Normal:** Solid traffic lines stay comfortably beneath the dotted 'Threat Limit' ceiling.\n* 🔴 **Abnormal / Threat:** Solid traffic lines breaking violently through the dotted Threat Limit line triggers immediate threshold events."
+        "content": "### 📈 Threat: Query Saturation\n**How to read this section:** The corridor chart overlays live traffic against its own established mathematical 'norm' based on the time of day.\n* 🔴 **Threat Hunt:** Solid traffic lines breaking violently through the dotted red 'Threat Limit' ceiling triggers volume alerts."
       }
     },
     {
       "type": "timeseries",
       "title": "Threat Thresholds vs Safe Baseline Corridor (Query Rate)",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 51 },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 52 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [
         { "expr": "home_ids_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Live" },
@@ -181,7 +169,7 @@
     {
       "type": "timeseries",
       "title": "Baseline Deviations (Z-Scores) — Behavioral Threats",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 51 },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 52 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [
         { "expr": "home_ids_zscore_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Query-Z" },

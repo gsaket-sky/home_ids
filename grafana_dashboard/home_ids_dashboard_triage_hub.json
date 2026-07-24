@@ -33,12 +33,12 @@
     },
     {
       "type": "text",
-      "title": "ℹ️ Guide: Infrastructure Pipeline Health",
+      "title": "📖 Analyst Field Guide: Infrastructure & IPS Health",
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 2 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### ⚙️ Infrastructure Pipeline Health\nMonitors the physical health and throughput of your Python engine, SQLite databases, and Zeek collectors.\n* 🟢 **Normal:** Pipeline Lag is < 2 seconds. Zeek Status is ONLINE. Alert Backlog is 0.\n* 🔴 **Abnormal:** High Pipeline Lag means the database is locked. A rising Alert Backlog means the script has lost internet or Telegram API connection and is caching alerts in RAM."
+        "content": "### ⚙️ Engine Health & Mitigation Status\n* **Pipeline Lag & EPS:** Verifies the Python engine is processing Zeek and Pi-hole databases in real-time. If lag exceeds 5s, the engine is bottlenecked.\n* **IPS Armed & Actions:** Shows if the script is allowed to modify the network. *Pi-hole Blocks* indicate domains injected into gravity. *Network Drops* indicate MAC addresses severed at the router via webhook."
       }
     },
     {
@@ -59,44 +59,44 @@
     },
     {
       "type": "stat",
-      "title": "Pipeline Lag (DB Sync)",
+      "title": "IPS Pi-hole Blocks (1h)",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "sum(increase(home_ids_ips_pihole_blocks_total[1h])) or vector(0)", "legendFormat": "Blocked Domains" } ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds", "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "orange" } ] } } }
+    },
+    {
+      "type": "stat",
+      "title": "IPS Network Drops (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [ { "expr": "sum(increase(home_ids_ips_router_isolations_total[1h])) or vector(0)", "legendFormat": "Severed MACs" } ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds", "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Pipeline Lag (DB Sync)",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_collector_lag_seconds", "legendFormat": "Lag" } ],
       "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "value": 0, "color": "green" }, { "value": 5, "color": "yellow" }, { "value": 15, "color": "red" } ] } } }
     },
     {
       "type": "stat",
-      "title": "Pipeline Events Per Sec (EPS)",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "rate(home_ids_events_processed_total[10m]) * 60", "legendFormat": "DNS/min" } ],
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds", "steps": [ { "value": 0, "color": "blue" } ] } } }
-    },
-    {
-      "type": "stat",
       "title": "Pipeline Alerts Fired (1h)",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 6 },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "increase(home_ids_alerts_total[1h])", "legendFormat": "Alerts" } ],
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds", "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "orange" } ] } } }
     },
     {
-      "type": "stat",
-      "title": "Alert Delivery Backlog",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_alert_queue_size", "legendFormat": "Queued" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "value": 0, "color": "green" }, { "value": 5, "color": "orange" }, { "value": 20, "color": "red" } ] } } }
-    },
-    {
       "type": "text",
-      "title": "ℹ️ Guide: Macro Threat Overview",
+      "title": "📖 Analyst Field Guide: Macro Threat Overview",
       "gridPos": { "h": 5, "w": 24, "x": 0, "y": 10 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🌍 Macro Threat Overview\nA 30,000-foot view of your entire network ecosystem.\n* **Live Baseline Breaches:** Counts how many devices are currently violating their own historical bandwidth/query limits.\n* **Anti-Poison Freezes:** Shows how many devices are currently blocked from updating their machine-learning baselines because they are exhibiting active threat behaviors (prevents malware from teaching the AI that malware is 'normal').\n* **Severe Threats:** Active devices with an aggregated risk score ≥ 6.0."
+        "content": "### 🌍 Macro Threat Overview\n* **Live Baseline Breaches:** Devices violating their own mathematical limits right now.\n* **Anti-Poison Freezes:** Devices that are exhibiting threat behavior and have been locked out of teaching the Machine Learning engine (prevents malware from making its own traffic look 'normal').\n* **Severe Threats:** Active devices requiring human intervention (Risk Score ≥ 6.0)."
       }
     },
     {
@@ -141,12 +141,12 @@
     },
     {
       "type": "text",
-      "title": "ℹ️ Guide: Master Threat Ledger & Incident Triage",
+      "title": "📖 Analyst Field Guide: The 3-Step Threat Hunt",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🚨 Master Threat Ledger & Incident Triage\nThis table auto-sorts every device on your network by Risk Score, aggregating its AI and structural diagnostics.\n\n**Dictionary of Terms:**\n* **TI Match Flag & TI Risk:** The device queried a domain explicitly listed on a global hacker blocklist (AlienVault OTX, AbuseIPDB, VirusTotal).\n* **JA3 Malicious Hash:** Zeek caught the device making a TLS encrypted connection using the exact cryptographic fingerprint of known malware.\n* **Probation:** A yellow flag meaning the device is new and hasn't collected 24 hours of baseline data yet. Thresholds are stricter for these devices.\n* **Safe Listed:** A blue flag meaning this IP or Hostname is whitelisted in `config.json` and exempt from IPS quarantine blocks.\n\n**Action Item:** Click any Hostname to warp directly to its dedicated forensics dashboard."
+        "content": "### 🚨 The 3-Step Threat Hunt (Master Ledger)\n**Step 1. Check the Risk Score & IPS Blocks:** Any device at the top of the table (Red Risk) is anomalous. If 'IPS Blocks' is > 0, the script is actively fighting the device by blacklisting domains. \n**Step 2. Identify the Threat Vector:**\n* **High ML Score & High Blocked Ratio?** The device is acting strange and failing lookups. Click its Hostname and open **DNS & ML Diagnostics** to check for DGA Ransomware.\n* **TI Match Flag = 1?** The device queried a known hacker domain. Click its Hostname and open **GeoIP & OSINT** to see the AbuseIPDB/VirusTotal sandbox details.\n* **Zeek Notices or JA3 Hash > 0?** Network-level threat. Click its Hostname and open **Zeek NDR** to check for Data Exfiltration or Lateral Network Scans.\n**Step 3. Verify Probation:** If Probation = 1, the device is brand new to the network. The AI is highly sensitive to it, so false positives are possible until it establishes a 24-hour baseline."
       }
     },
     {
@@ -159,16 +159,15 @@
         { "expr": "home_ids_ml_anomaly_score", "format": "table", "instant": true, "refId": "B" },
         { "expr": "home_ids_ti_risk", "format": "table", "instant": true, "refId": "C" },
         { "expr": "home_ids_ti_match", "format": "table", "instant": true, "refId": "D" },
-        { "expr": "home_ids_query_rate", "format": "table", "instant": true, "refId": "E" },
+        { "expr": "sum by (hostname) (increase(home_ids_ips_pihole_blocks_total[1h]))", "format": "table", "instant": true, "refId": "E" },
         { "expr": "home_ids_query_rate_threshold_limit", "format": "table", "instant": true, "refId": "F" },
-        { "expr": "home_ids_unique_domains", "format": "table", "instant": true, "refId": "G" },
-        { "expr": "home_ids_blocked_ratio", "format": "table", "instant": true, "refId": "H" },
-        { "expr": "home_ids_zeek_conn_count", "format": "table", "instant": true, "refId": "I" },
-        { "expr": "home_ids_zeek_new_ips", "format": "table", "instant": true, "refId": "J" },
-        { "expr": "home_ids_zeek_notices", "format": "table", "instant": true, "refId": "K" },
-        { "expr": "home_ids_zeek_ja3_malicious", "format": "table", "instant": true, "refId": "L" },
-        { "expr": "home_ids_probation_status", "format": "table", "instant": true, "refId": "M" },
-        { "expr": "home_ids_safe_device", "format": "table", "instant": true, "refId": "N" }
+        { "expr": "home_ids_blocked_ratio", "format": "table", "instant": true, "refId": "G" },
+        { "expr": "home_ids_zeek_conn_count", "format": "table", "instant": true, "refId": "H" },
+        { "expr": "home_ids_zeek_lateral_moves", "format": "table", "instant": true, "refId": "I" },
+        { "expr": "home_ids_zeek_notices", "format": "table", "instant": true, "refId": "J" },
+        { "expr": "home_ids_zeek_ja3_malicious", "format": "table", "instant": true, "refId": "K" },
+        { "expr": "home_ids_probation_status", "format": "table", "instant": true, "refId": "L" },
+        { "expr": "home_ids_safe_device", "format": "table", "instant": true, "refId": "M" }
       ],
       "transformations": [
         { "id": "joinByField", "options": { "byField": "hostname", "mode": "outer" } },
@@ -182,16 +181,15 @@
               "Value #B": "ML Score",
               "Value #C": "TI Threat",
               "Value #D": "TI Match Flag",
-              "Value #E": "Queries/Min",
+              "Value #E": "IPS Blocks Fired",
               "Value #F": "Baseline Limit",
-              "Value #G": "Unique Domains",
-              "Value #H": "Blocked Ratio",
-              "Value #I": "Zeek Conns",
-              "Value #J": "Zeek New IPs",
-              "Value #K": "Zeek Notices",
-              "Value #L": "JA3 Hash",
-              "Value #M": "Probation",
-              "Value #N": "Safe Listed"
+              "Value #G": "Blocked Ratio",
+              "Value #H": "Zeek Conns",
+              "Value #I": "Zeek Lateral Moves",
+              "Value #J": "Zeek Notices",
+              "Value #K": "JA3 Hash",
+              "Value #L": "Probation",
+              "Value #M": "Safe Listed"
             }
           }
         },
@@ -217,13 +215,142 @@
           },
           { "matcher": { "id": "byName", "options": "Live Risk" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 4 }, { "color": "red", "value": 6 } ] } } ] },
           { "matcher": { "id": "byName", "options": "ML Score" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.05 } ] } } ] },
-          { "matcher": { "id": "byName", "options": "TI Threat" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.5 } ] } } ] },
+          { "matcher": { "id": "byName", "options": "IPS Blocks Fired" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 1 } ] } } ] },
           { "matcher": { "id": "byName", "options": "TI Match Flag" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } } ] },
           { "matcher": { "id": "byName", "options": "JA3 Hash" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } } ] },
-          { "matcher": { "id": "byName", "options": "Zeek Notices" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } } ] },
+          { "matcher": { "id": "byName", "options": "Zeek Lateral Moves" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } } ] },
           { "matcher": { "id": "byName", "options": "Probation" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 1 } ] } } ] },
           { "matcher": { "id": "byName", "options": "Safe Listed" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "transparent", "value": 0 }, { "color": "blue", "value": 1 } ] } } ] },
           { "matcher": { "id": "byName", "options": "Blocked Ratio" }, "properties": [ { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 0.8 } ] } } ] }
+        ]
+      }
+    },
+    {
+      "type": "text",
+      "title": "📖 Analyst Field Guide: IPS Mitigation Audit",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 43 },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### 🛡️ Automated IPS Audit Ledger\nUse this section to review exactly what the script has done to your network. \n* **Domains Automatically Blocked:** Shows exactly which domain was blocked via Pi-hole and what device caused it. *If a legitimate app breaks, copy the domain from this list and add it to `safe_domains` in your `config.json`.*\n* **IPS Errors / Failures:** Shows if the script attempted to block a threat but was rejected by the router or Pi-hole API.\n* **Safe-Listed Devices:** Shows devices explicitly exempted from IPS quarantine in your configuration."
+      }
+    },
+    {
+      "type": "table",
+      "title": "🛑 Domains Automatically Blocked by Script (Pi-hole IPS)",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 47 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        {
+          "expr": "sum by (hostname, domain) (increase(home_ids_ips_pihole_blocks_total[$__range])) > 0",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": {
+              "hostname": "Target Device",
+              "domain": "Blocked Domain",
+              "Value": "Times Blocked"
+            }
+          }
+        },
+        { "id": "sortBy", "options": { "fields": [ { "desc": true, "displayName": "Times Blocked" } ] } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Times Blocked" },
+            "properties": [
+              { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } },
+              { "id": "custom.displayMode", "value": "color-background" },
+              { "id": "custom.align", "value": "center" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "⚠️ IPS Errors (Failed Mitigations)",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 47 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        {
+          "expr": "sum by (target_type) (increase(home_ids_ips_errors_total[$__range])) > 0",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": {
+              "target_type": "Failing API Route",
+              "Value": "Error Count"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "center" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Error Count" },
+            "properties": [
+              { "id": "color", "value": { "mode": "thresholds", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] } },
+              { "id": "custom.displayMode", "value": "color-text" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "🛡️ Active Safe-Listed Devices (Exempt from Quarantine)",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 52 },
+      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
+      "targets": [
+        {
+          "expr": "home_ids_safe_device > 0",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "device": true, "device_type": true, "__name__": true, "instance": true, "job": true },
+            "renameByName": {
+              "hostname": "Whitelisted Device",
+              "Value": "Status"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "center" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              {
+                "id": "valueMappings",
+                "value": [
+                  { "type": "value", "options": { "1": { "color": "blue", "index": 0, "text": "SAFE LISTED" } } }
+                ]
+              },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
         ]
       }
     }

@@ -11,6 +11,10 @@ RECENT FIXES:
   thread pool to enrich Zeek-only devices with hostnames.
 - FIXED (ARCH): Converted all static integer counters to time-aware rolling deques to eliminate 
   the 5-minute Timing Cliff race condition between Pi-hole and Zeek events.
+- ADDED (FEATURE): Extracted `conn_state` to track S0/REJ port-scan footprints.
+- ADDED (FEATURE): Extracted connection `duration` to track long-lived reverse shells/tunnels.
+- ADDED (ENRICHMENT): Added `_new_lateral_events` queue and `pop_new_lateral_events()` to expose 
+  source IP, target IP, and port pairs for enriched Prometheus counter export.
 """
 import ipaddress
 import json
@@ -141,7 +145,6 @@ class ZeekFeatureExtractor:
         if home_subnets is None:
             home_subnets = ["192.168.178.0/24"]
             
-        # FIX 1: Converted static int counters to time-aware rolling windows for smooth decay
         self._conn_ts = defaultdict(lambda: deque(maxlen=5000))
         self._new_ips = defaultdict(dict)
         self._ja3_hits = defaultdict(lambda: deque(maxlen=100))
@@ -153,16 +156,19 @@ class ZeekFeatureExtractor:
         self._doh_bypass_uids = defaultdict(dict)
         self._lateral_moves = defaultdict(lambda: deque(maxlen=500))
         
+        # FEATURE: Advanced conn.log behavioral tracking
+        self._conn_states = defaultdict(lambda: deque(maxlen=5000))
+        self._conn_durations = defaultdict(lambda: deque(maxlen=5000))
+        self._new_lateral_events = defaultdict(list)
+        
         self._wire_dns_resolutions = {}
         self._mac_bindings = {}
         self.ti_engine = ti_engine
         
-        # FIX: Integrate GeoIP engine and background PTR resolution pool
         self.geoip_engine = geoip_engine
         self._reverse_dns_cache = {}
         self._ptr_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="zeek_ptr")
         
-        # ADDED: Store reference to safe_ips set for lateral movement exemption
         self.safe_ips = safe_ips if safe_ips is not None else set()
 
         self._home_nets = []
@@ -202,8 +208,15 @@ class ZeekFeatureExtractor:
         """Provides Zeek-discovered hostnames for devices bypassing Pi-hole."""
         return self._reverse_dns_cache.get(ip) if self._reverse_dns_cache.get(ip) not in (None, "pending", "unknown") else None
 
+    def pop_new_lateral_events(self, device_ip: str) -> list[tuple[str, int]]:
+        """Flushes and returns un-exported lateral movement target events for Prometheus counter export."""
+        events = self._new_lateral_events.get(device_ip, [])
+        if events:
+            self._new_lateral_events[device_ip] = []
+        return events
+
     def prune(self, now_ts: float, window: int) -> None:
-        """FIX 1: Dynamically ages out old Zeek events to prevent hard-reset timing cliffs."""
+        """Dynamically ages out old Zeek events to prevent hard-reset timing cliffs."""
         cutoff = now_ts - window
         
         def prune_deque(dq):
@@ -221,13 +234,19 @@ class ZeekFeatureExtractor:
             if not self._conn_ts[src]: del self._conn_ts[src]
 
         for src in list(self._lateral_moves.keys()):
-            prune_deque(self._lateral_moves[src])
+            prune_tuple_deque(self._lateral_moves[src])
             
         for src in list(self._susp_ports.keys()):
             prune_deque(self._susp_ports[src])
             
         for src in list(self._outbound_bytes.keys()):
             prune_tuple_deque(self._outbound_bytes[src])
+            
+        for src in list(self._conn_states.keys()):
+            prune_tuple_deque(self._conn_states[src])
+            
+        for src in list(self._conn_durations.keys()):
+            prune_tuple_deque(self._conn_durations[src])
 
         for src in list(self._new_ips.keys()):
             prune_dict(self._new_ips[src])
@@ -286,17 +305,31 @@ class ZeekFeatureExtractor:
         
         self._conn_ts[src].append(ts)
         
+        # Track Port Scan Footprints (S0 = SYN Sent / No Reply, REJ = Rejected)
+        conn_state = ev.get("conn_state", "")
+        if conn_state:
+            self._conn_states[src].append((ts, conn_state))
+            
+        # Track Max Connection Duration for Reverse Shell/VPN Tunnels
+        duration = ev.get("duration")
+        if duration is not None:
+            try:
+                self._conn_durations[src].append((ts, float(duration)))
+            except (ValueError, TypeError):
+                pass
+        
         if dst_ip:
             self._enrich_ptr(dst_ip)
             if self._is_home_ip(src) and self._is_home_ip(dst_ip):
                 if dst_port in LATERAL_PORTS:
-                    # Skip counting lateral moves if connecting to/from a whitelisted safe server IP
                     if dst_ip not in self.safe_ips and src not in self.safe_ips:
-                        self._lateral_moves[src].append(ts)
+                        self._lateral_moves[src].append((ts, dst_ip, dst_port))
+                        self._new_lateral_events[src].append((dst_ip, dst_port))
             elif dst_ip and self._is_home_ip(dst_ip) and not self._is_home_ip(src):
                 if dst_port in LATERAL_PORTS:
                     if dst_ip not in self.safe_ips:
-                        self._lateral_moves[dst_ip].append(ts)
+                        self._lateral_moves[dst_ip].append((ts, src, dst_port))
+                        self._new_lateral_events[dst_ip].append((src, dst_port))
 
             if not self._is_home_ip(src) and not self._is_home_ip(dst_ip):
                 if len(self._new_ips[src]) < 1000:
@@ -378,6 +411,12 @@ class ZeekFeatureExtractor:
         self._notices[src].append({"note": f"weird:{ev.get('name', '')}", "msg": ev.get("addl", ""), "ts": ev.get("ts"), "dest_port": dst_port})
 
     def get_features(self, device_ip: str) -> dict:
+        states = [s for t, s in self._conn_states.get(device_ip, [])]
+        s0_rej_count = sum(1 for s in states if s in ("S0", "REJ"))
+        
+        durations = [d for t, d in self._conn_durations.get(device_ip, [])]
+        max_duration = max(durations) if durations else 0.0
+
         return {
             "zeek_conn_count": len(self._conn_ts.get(device_ip, [])),
             "zeek_new_ips": len(self._new_ips.get(device_ip, {})),
@@ -387,7 +426,9 @@ class ZeekFeatureExtractor:
             "zeek_http_ua_count": len(self._http_uas.get(device_ip, {})),
             "zeek_outbound_bytes": sum(b for t, b in self._outbound_bytes.get(device_ip, [])),
             "zeek_doh_bypass": len(self._doh_bypass_uids.get(device_ip, {})),
-            "zeek_lateral_moves": len(self._lateral_moves.get(device_ip, []))
+            "zeek_lateral_moves": len(self._lateral_moves.get(device_ip, [])),
+            "zeek_s0_rej_count": s0_rej_count,     
+            "zeek_max_duration": max_duration      
         }
 
     def get_alerts(self, device_ip: str) -> list[dict]:
@@ -401,7 +442,7 @@ class ZeekFeatureExtractor:
     def reset_all(self) -> None:
         for d in (self._conn_ts, self._new_ips, self._ja3_hits, self._notices, 
                   self._susp_ports, self._http_uas, self._http_reqs, self._outbound_bytes, 
-                  self._doh_bypass_uids, self._lateral_moves):
+                  self._doh_bypass_uids, self._lateral_moves, self._conn_states, self._conn_durations, self._new_lateral_events):
             d.clear()
         if len(self._wire_dns_resolutions) > 10000:
             self._wire_dns_resolutions.clear()

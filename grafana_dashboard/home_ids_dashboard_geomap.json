@@ -6,29 +6,9 @@
   "refresh": "10s",
   "templating": {
     "list": [
-      {
-        "name": "PROMETHEUS_DS",
-        "type": "datasource",
-        "query": "prometheus",
-        "label": "Prometheus Source"
-      },
-      {
-        "name": "LOKI_DS",
-        "type": "datasource",
-        "query": "loki",
-        "label": "Loki Source"
-      },
-      {
-        "name": "device",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-        "query": "label_values(home_ids_risk_score, hostname)",
-        "refresh": 1,
-        "includeAll": true,
-        "customAllValue": ".*",
-        "multi": false,
-        "current": { "text": "All", "value": ".*" }
-      }
+      { "name": "PROMETHEUS_DS", "type": "datasource", "query": "prometheus", "label": "Prometheus Source" },
+      { "name": "LOKI_DS", "type": "datasource", "query": "loki", "label": "Loki Source" },
+      { "name": "device", "type": "query", "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" }, "query": "label_values(home_ids_risk_score, hostname)", "refresh": 1, "includeAll": true, "customAllValue": ".*", "multi": false, "current": { "text": "All", "value": ".*" } }
     ]
   },
   "panels": [
@@ -39,23 +19,23 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-v2) | [📊 DNS & ML Diagnostics](/d/ids-tier2-dns/home-ids-tier-2-dns-ml-diagnostics?var-device=${device}) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-network-lateral-zeek-ndr?var-device=${device}) | **🌍 GeoIP & OSINT Intel** | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
+        "content": "### 🧭 [Triage Hub](/d/ids-master-hub-ultimate?var-device=${device}) | [📊 DNS & ML Diagnostics](/d/ids-tier2-dns/home-ids-tier-2-dns-ml-diagnostics?var-device=${device}) | [🔒 Network & Lateral (Zeek NDR)](/d/ids-tier2-ndr/home-ids-tier-2-network-lateral-zeek-ndr?var-device=${device}) | **🌍 GeoIP & OSINT Intel** | [⚙️ Engine System Health](/d/ids-system-health/home-ids-tier-2-engine-system-health)"
       }
     },
     {
       "type": "text",
-      "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 2 },
+      "title": "📖 Analyst Field Guide: Geolocation & Sandbox Correlation",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 2 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🚨 Threat: Threat Intelligence & Sandbox Detonations\n**How to read this section:** Skips behavioral guesswork and looks for absolute, verified malware signatures using your integrated API feeds (AbuseIPDB, VirusTotal, AlienVault OTX).\n* 🟢 **Normal:** These panels should be completely flat at zero.\n* 🔴 **Abnormal / Threat:** Any spike means an internal device successfully resolved or connected to an explicitly listed global hacker blocklist or a known malicious payload dropper."
+        "content": "### 🚨 Threat: Threat Intelligence & Sandbox Detonations\n**How to hunt OSINT matches:** This dashboard skips AI guesswork and relies on absolute signatures from AlienVault OTX, AbuseIPDB, and VirusTotal.\n* 🟢 **Normal:** These panels should be completely flat at zero.\n* 🔴 **Threat Hunt:** A spike here is a guaranteed positive. A device on your network successfully resolved a known malicious payload dropper. Check the Loki logs to see exactly which domain/IP was flagged, then use the Geo Threat Map to verify if the server is hosted in a high-risk jurisdiction (e.g., RU, KP, IR)."
       }
     },
     {
       "type": "timeseries",
       "title": "Threat Intelligence Feed Match Risk",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_ti_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.5 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
@@ -63,7 +43,7 @@
     {
       "type": "timeseries",
       "title": "AbuseIPDB Reputation Threat Score",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_abuseipdb_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 3 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
@@ -71,7 +51,7 @@
     {
       "type": "timeseries",
       "title": "VirusTotal Sandbox Analysis Hazard",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_virustotal_risk{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 3 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
@@ -79,25 +59,25 @@
     {
       "type": "logs",
       "title": "🔎 Filtered Workspace: OSINT & Threat Intel Forensics (Loki)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 15 },
       "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | hostname=~\"$device\" |~ \"(?i)threat intelligence|abuseipdb|virustotal\"" } ],
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)threat intelligence|abuseipdb|virustotal\" | json | device_hostname=~\"$device\"" } ],
       "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
     },
     {
       "type": "text",
-      "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 21 },
+      "title": "📖 Analyst Field Guide: Global Routing",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 23 },
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 📡 Global Infrastructure & Geographic Routing (Global Flow)\n**How to trace routing parameters:** Correlates external network endpoints back to their upstream routing providers (ASNs) and physical borders. *(Note: Maps represent total network environment outflow).* \n* 🟢 **Normal:** Traffic routes cleanly to AWS, Google, Azure, and your home country.\n* 🔴 **Abnormal / Threat:** Large red bubbles over high-risk jurisdictions, or malicious ASN blocklist flags illuminating in the Risk Magnitude table."
+        "content": "### 📡 Global Infrastructure & Geographic Routing (Global Flow)\n**How to trace routing parameters:** Correlates external network endpoints back to their upstream routing providers (ASNs) and physical borders.\n* 🔴 **Threat Hunt:** Look for large red bubbles over high-risk jurisdictions on the map. If the 'Risk Magnitude by ASN' table lights up, an organization known for bulletproof hosting or ignoring abuse requests is heavily active on your network."
       }
     },
     {
       "type": "table",
       "title": "Risk Magnitude Allocation by ASN Matrix",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_asn_risk_score", "format": "table", "instant": true } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 4 } ] } } }
@@ -105,7 +85,7 @@
     {
       "type": "timeseries",
       "title": "Top External Target Routing Providers (ASN Volume)",
-      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 24 },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 27 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "sum by (asn, org) (rate(home_ids_geo_traffic_total[5m]))", "legendFormat": "{{asn}} ({{org}})" } ],
       "fieldConfig": { "defaults": { "custom": { "fillOpacity": 0, "lineWidth": 1 } } }
@@ -113,7 +93,7 @@
     {
       "type": "geomap",
       "title": "Geo Threat Map (Coords)",
-      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 32 },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 35 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [
         { "expr": "home_ids_geo_risk", "format": "table", "instant": true, "refId": "A" },
@@ -146,7 +126,7 @@
     {
       "type": "geomap",
       "title": "Threat Density (Country Code Lookup)",
-      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 32 },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 35 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_country_threat_density", "format": "table", "instant": true } ],
       "options": {

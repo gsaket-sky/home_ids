@@ -11,6 +11,8 @@ RECENT FIXES:
 - Re-architected C2 Beaconing to catch "Low-and-Slow" intervals, bypassing the volume dampener.
 - Eliminated total infrastructure suppression blind spot. Absolute/deterministic threats
   are now fully monitored on routers, gateways, and DNS servers while skipping soft volume noise.
+- ADDED (FEATURE): Integrated TCP Port Scan (S0/REJ) detection rules with immediate IPS trigger ceilings.
+- ADDED (FEATURE): Integrated Covert Tunnel / Reverse Shell rules based on extended session durations.
 """
 from utils import is_telemetry_domain
 import math
@@ -241,6 +243,22 @@ class RiskScorer:
         c2_jitter_count = safe_float(features.get("beaconing_c2_count", 0), 0.0)
         if c2_jitter_count > 0:
             add("C2 Jitter Clock Verification", 6.0, min(c2_jitter_count, 100), f"Uniform periodicity check-in sequences tracked ({int(c2_jitter_count)} hits)")
+
+        # 7. TCP Port Scan Detection (S0 / REJ)
+        s0_rej = safe_float(features.get("zeek_s0_rej_count", 0), 0.0)
+        if s0_rej > 50:
+            LOGGER.warning("Active TCP Port Scan factored for %s", getattr(state, "hostname", "unknown"))
+            add("TCP Port Scan (S0/REJ)", 7.5, min(s0_rej, 5000), f"Massive volume of rejected/unanswered connections ({int(s0_rej)} hits)")
+        elif s0_rej > 15:
+            add("Suspicious Connection Failures", 3.5, min(s0_rej, 5000), f"Elevated rejected/unanswered connections ({int(s0_rej)} hits)")
+
+        # 8. Long-lived Connection (Reverse Shell / Tunnel)
+        max_dur = safe_float(features.get("zeek_max_duration", 0), 0.0)
+        if max_dur > 43200: # 12 hours
+            LOGGER.warning("Persistent long-lived connection factored for %s", getattr(state, "hostname", "unknown"))
+            add("Covert Tunnel / Reverse Shell", 6.5, round(max_dur, 1), f"Extremely long connection duration ({int(max_dur)}s)")
+        elif max_dur > 14400: # 4 hours
+            add("Long-lived Connection", 3.0, round(max_dur, 1), f"Suspiciously long session duration ({int(max_dur)}s)")
 
         # =====================================================================
         # ZEEK ANOMALY SIGNATURES
