@@ -30,7 +30,12 @@ RECENT FIXES APPLIED:
 21. FIXED: Unified AlertJSONWriter initialization to prevent JSONDecodeError crashes caused by twin instances fighting over file structures.
 22. ADDED (FEATURE): Enhanced Telegram Alerting to include exact Queried Top Domain, Human-Readable Outbound Bytes, and chronological 20-event DNS sequence with color-coded status tags.
 23. ADDED (ENRICHMENT): Exported `ndr_tcp_scan_metric`, `ndr_max_duration_metric`, and `ndr_lateral_targets_total` to expose exact internal lateral movement target IP and port mappings in Prometheus.
+24. ADDED (AUDIT): Integrated `DNSQueryJSONWriter` to stream all raw Pi-hole activity (allowed, blocked, NXDOMAIN) to Loki for complete domain auditability and false-positive recovery in Grafana.
+25. ADDED (SOC): Extracted active `honeypot_ips` from configuration and routed them to the Zeek analyzer to support deterministic Deception network alerts.
+26. FIXED (CRITICAL): Resolved the IP-to-MAC Migration Race Condition. Prevents temporary IP-based profiles created during Zeek startup lag from overwriting and destroying mature MAC-based profiles loaded from disk.
+27. FIXED (CRITICAL): Rerouted zero-volume skip logic. Devices with 0 DNS traffic but active Zeek activity (like internal lateral moves or honeypot triggers) are now correctly scored instead of being skipped.
 """
+
 import argparse
 import sys
 import hashlib
@@ -74,11 +79,11 @@ from ips import IPSMitigator
 from metrics import (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
     blocked_ratio_metric, nxdomain_ratio_metric, suspicious_domains_metric,
-    ml_anomaly_metric, zscore_query_metric, zscore_entropy_metric,
+    ml_anomaly_metric, markov_anomaly_metric, zscore_query_metric, zscore_entropy_metric,
     zscore_unique_metric, new_domains_metric, deep_domains_metric,
     nxdomain_tld_conc_metric, zscore_nxdomain_metric, zscore_blocked_metric,
     zscore_dga_metric, risk_velocity_metric, zeek_conn_count_metric,
-    zeek_new_ips_metric, zeek_ja3_metric, zeek_notices_metric,
+    zeek_new_ips_metric, zeek_ja3_metric, zeek_ja4_metric, zeek_notices_metric,
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
     ti_ioc_hits_total, safe_device_metric, probation_status_metric, baseline_poisoned_metric,
     geo_risk_metric, geo_hits_metric,
@@ -93,7 +98,7 @@ from metrics import (
     beaconing_volume_metric, jitter_cv_metric,
     zeek_status_metric, zeek_events_processed_metric,
     ips_status_metric, ips_pihole_blocks_metric, ips_isolations_metric, ips_errors_metric,
-    ndr_tcp_scan_metric, ndr_max_duration_metric, ndr_lateral_targets_total
+    ndr_tcp_scan_metric, ndr_max_duration_metric, ndr_honeypot_hits_metric, ndr_lateral_targets_total
 )
 
 RUNNING         = True
@@ -106,6 +111,36 @@ MAX_STATES        = int(CONFIG.get("max_device_states", 5000))
 KNOWN_BLOCKED     = frozenset({1, 4, 5, 6, 7, 8, 10})
 KNOWN_NXDOMAIN    = frozenset({3, 12, 13})
 PEER_CLUSTER_REGISTRY = {}
+
+class DNSQueryJSONWriter:
+    """Thread-safe rotating JSONL writer for logging complete raw Pi-hole activity."""
+    def __init__(self, path: str = "state/dns_queries.jsonl", max_bytes: int = 104857600):
+        self.path = Path(path)
+        self.max_bytes = max_bytes
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+    def write_batch(self, events: list[dict]) -> None:
+        """Appends a batch of raw DNS query transactions safely."""
+        if not events:
+            return
+        with self._lock:
+            if self.path.exists() and self.path.stat().st_size > self.max_bytes:
+                try:
+                    # Truncate to retain latest 20,000 log entries when boundary is hit
+                    lines = self.path.read_text(encoding="utf-8", errors="ignore").splitlines()[-20000:]
+                    tmp = self.path.with_suffix(".tmp")
+                    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    tmp.replace(self.path)
+                except Exception:
+                    self.path.unlink(missing_ok=True)
+
+            try:
+                with open(self.path, "a", encoding="utf-8") as f:
+                    for ev in events:
+                        f.write(json.dumps(ev, separators=(",", ":")) + "\n")
+            except Exception as exc:
+                LOGGER.warning("Could not write DNS query log batch: %s", exc)
 
 def calculate_adaptive_zscore(val: float, baseline, feature_name: str, dev_type: str, hour: int) -> float:
     """
@@ -251,16 +286,17 @@ def _is_safe_device(client_ip: str, hostname: str, safe_ips: set, safe_host_patt
 _DEVICE_GAUGES = (
     risk_metric, query_rate_metric, unique_domains_metric, entropy_metric,
     blocked_ratio_metric, nxdomain_ratio_metric, suspicious_domains_metric,
-    ml_anomaly_metric, zscore_query_metric, zscore_entropy_metric,
+    ml_anomaly_metric, markov_anomaly_metric, zscore_query_metric, zscore_entropy_metric,
     zscore_unique_metric, new_domains_metric, deep_domains_metric,
     nxdomain_tld_conc_metric, zscore_nxdomain_metric, zscore_blocked_metric,
     zscore_dga_metric, risk_velocity_metric, zeek_conn_count_metric,
-    zeek_new_ips_metric, zeek_ja3_metric, zeek_notices_metric,
+    zeek_new_ips_metric, zeek_ja3_metric, zeek_ja4_metric, zeek_notices_metric,
     zeek_susp_ports_metric, ti_risk_metric, ti_match_metric,
     safe_device_metric, probation_status_metric, baseline_poisoned_metric, query_rate_baseline_mean_metric,
     query_rate_threshold_limit_metric, ndr_doh_bypass_metric, ndr_lateral_moves_metric, 
     ndr_jitter_c2_metric, ndr_exfil_z_metric, abuseipdb_risk_metric, virustotal_risk_metric,   
-    beaconing_volume_metric, jitter_cv_metric, ndr_tcp_scan_metric, ndr_max_duration_metric
+    beaconing_volume_metric, jitter_cv_metric, ndr_tcp_scan_metric, ndr_max_duration_metric,
+    ndr_honeypot_hits_metric
 )
 
 def _remove_device_metric_labels(dev_id: str, hostname: str, device_type: str, keep_safe_flag: bool = False) -> None:
@@ -418,7 +454,7 @@ def _translate_status(status_code: int) -> str:
     elif status_code in {3, 12, 13, 14}: 
         return "🟡 NXDOMAIN"
     else:
-        return "🟢 SUCCESS"
+        return "🟢 ALLOWED"
 
 def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
                          alert_threshold: float, signature: str,
@@ -450,7 +486,7 @@ def _build_alert_payload(st, dev_id: str, now: float, risk_score: float,
         "ml_score": float(ml_score),
         "threat_intel_matches": ti_matches,
         "zeek_alerts": zeek_alerts or [],
-        "dns_sequence": recent_events or []
+        "dns_sequence": recent_events or [] 
     }
 
 def _format_alert_message(payload: dict) -> str:
@@ -510,11 +546,17 @@ def main():
         max_bytes=int(CONFIG.get("alert_json_max_bytes", 1073741824)),
     )
 
+    dns_query_log = DNSQueryJSONWriter(
+        path=CONFIG.get("dns_query_json_path", "state/dns_queries.jsonl"),
+        max_bytes=int(CONFIG.get("dns_query_max_bytes", 104857600)),
+    )
+
     ips_mitigator = IPSMitigator(CONFIG, stream_writer=alert_log)
     ips_status_metric.set(1.0 if CONFIG.get("ips_enabled", False) else 0.0)
 
     _safe_ips = set(CONFIG.get("safe_ips", ["127.0.0.1"]))
     _safe_host_patterns = _safe_pattern_set(CONFIG.get("safe_host_patterns", []))
+    _honeypot_ips = set(CONFIG.get("honeypot_ips", []))
     
     collector = PiHoleCollector(
         db_path            = CONFIG.get("pihole_db", "/etc/pihole/pihole-FTL.db"),
@@ -595,19 +637,23 @@ def main():
     )
     
     home_subnets = CONFIG.get("home_subnets", [CONFIG.get("home_subnet", "192.168.178.0/24")])
-    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti, geoip_engine=geoip_engine, safe_ips=_safe_ips)
+    zeek_fx = ZeekFeatureExtractor(home_subnets=home_subnets, ti_engine=ti, geoip_engine=geoip_engine, safe_ips=_safe_ips, honeypot_ips=_honeypot_ips)
     
     start_http_server(int(CONFIG.get("metrics_port", 9105)))
 
     def _on_config_change(changed: dict) -> None:
-        """Dynamic Config reload bindings"""
-        if "safe_ips" in changed or "safe_host_patterns" in changed:
+        if "safe_ips" in changed or "safe_host_patterns" in changed or "honeypot_ips" in changed:
             _safe_ips.clear()
             _safe_ips.update(CONFIG.get("safe_ips", ["127.0.0.1"]))
             _safe_host_patterns.clear()
             _safe_host_patterns.update(_safe_pattern_set(CONFIG.get("safe_host_patterns", [])))
+            
+            _honeypot_ips.clear()
+            _honeypot_ips.update(CONFIG.get("honeypot_ips", []))
+            
             collector.excluded_ips = set(_safe_ips)
             collector.excluded_patterns = set(_safe_host_patterns)
+            zeek_fx.honeypot_ips = set(_honeypot_ips)
 
     CONFIG.set_notify(_on_config_change)
     CONFIG.start_watcher(interval=5.0)
@@ -653,6 +699,7 @@ def main():
             if rows:
                 collector_lag_metric.set(max(0.0, now - rows[-1]["timestamp"]))
 
+                raw_query_batch = []
                 with STATE_LOCK:
                     for row in rows:
                         client_ip = str(row["client_ip"])
@@ -663,9 +710,13 @@ def main():
                         
                         ip_dev_id = stable_device_id(client_ip)
                         if mac_addr and dev_id != ip_dev_id and ip_dev_id in states:
-                            states[dev_id] = states.pop(ip_dev_id)
-                            states[dev_id].device_id = dev_id
-                            LOGGER.info("Migrated device state for %s from IP to MAC tracking.", client_ip)
+                            # FIX: IP to MAC Migration Race Condition Protection
+                            if dev_id in states:
+                                del states[ip_dev_id]
+                            else:
+                                states[dev_id] = states.pop(ip_dev_id)
+                                states[dev_id].device_id = dev_id
+                                LOGGER.info("Migrated device state for %s from IP to MAC tracking.", client_ip)
 
                         if dev_id not in states:
                             states[dev_id] = DeviceState(
@@ -695,6 +746,19 @@ def main():
                         if status in KNOWN_BLOCKED: st.rolling.blocked += 1
                         if status in KNOWN_NXDOMAIN: st.rolling.nxdomain += 1
 
+                        raw_query_batch.append({
+                            "timestamp": float(row.get("timestamp", now)),
+                            "device": {
+                                "id": dev_id,
+                                "ip": client_ip,
+                                "hostname": hostname,
+                                "type": st.device_type,
+                            },
+                            "domain": domain,
+                            "status_code": status,
+                            "status_label": _translate_status(status)
+                        })
+
                         resolved_ip = zeek_fx.get_wire_ip(domain)
                         if not resolved_ip:
                             resolved_ip, _ = _geo_lookup_cached(geoip_engine, domain)
@@ -715,6 +779,8 @@ def main():
                             
                             if c_code in ["RU", "CN", "IR", "KP"]:
                                 geo_hits_metric.labels(str(c_code), str(c_asn)).inc(1)
+
+                dns_query_log.write_batch(raw_query_batch)
             else:
                 collector_lag_metric.set(0.0)
 
@@ -726,9 +792,13 @@ def main():
                         
                         ip_dev_id = stable_device_id(client_ip)
                         if mac_addr and dev_id != ip_dev_id and ip_dev_id in states:
-                            states[dev_id] = states.pop(ip_dev_id)
-                            states[dev_id].device_id = dev_id
-                            LOGGER.info("Migrated Zeek device state for %s from IP to MAC tracking.", client_ip)
+                            # FIX: IP to MAC Migration Race Condition Protection
+                            if dev_id in states:
+                                del states[ip_dev_id]
+                            else:
+                                states[dev_id] = states.pop(ip_dev_id)
+                                states[dev_id].device_id = dev_id
+                                LOGGER.info("Migrated Zeek device state for %s from IP to MAC tracking.", client_ip)
 
                         if dev_id not in states:
                             hostname = zeek_fx.get_hostname(client_ip) or "unknown"
@@ -810,7 +880,12 @@ def main():
                 with STATE_LOCK:
                     feats = extractor.compute(st, now, int(CONFIG.get("window_seconds", 300)))
                     
-                if feats["total"] == 0 and not zeek_fx.get_dest_ips(st.client_ip):
+                zeek_feats  = zeek_fx.get_features(st.client_ip)
+                zeek_alerts = zeek_fx.get_alerts(st.client_ip)
+                
+                # FIX: Ensure lateral moves, Honeypots, and JA4 hits are scored even if DNS volume is 0
+                zeek_activity_count = sum(v for k, v in zeek_feats.items() if isinstance(v, (int, float)))
+                if feats["total"] == 0 and zeek_activity_count == 0:
                     continue
 
                 feats["current_hour"] = current_hour
@@ -823,9 +898,6 @@ def main():
                     top_domain = max(st.rolling.domains, key=st.rolling.domains.get)
                 
                 feats["top_domain_is_familiar"] = bool(top_domain and top_domain in st.seen_domains)
-
-                zeek_feats  = zeek_fx.get_features(st.client_ip)
-                zeek_alerts = zeek_fx.get_alerts(st.client_ip)
                 feats.update(zeek_feats)
 
                 feats["query_rate_z"]         = calculate_adaptive_zscore(feats["query_rate"], st.rate_baseline, "rate", st.device_type, current_hour)
@@ -855,6 +927,10 @@ def main():
                 feats["vt_risk"] = vt_risk
 
                 ml_score = ml.score(dev_id, feats)
+                
+                # Fetch dynamically calculated Markov Sequence Anomaly from ML Engine
+                markov_anomaly = feats.get("markov_anomaly", 0.0)
+                
                 with STATE_LOCK:
                     risk_details = scorer.explain(feats, st, ml_score, zeek_alerts=zeek_alerts)
                     risk_score   = risk_details["risk"]
@@ -912,11 +988,14 @@ def main():
                 ndr_jitter_c2_metric.labels(str_dev_id, str_host, str_type).set(feats.get("beaconing_c2_count", 0))
                 ndr_exfil_z_metric.labels(str_dev_id, str_host, str_type).set(feats.get("outbound_bytes_z", 0.0))
 
-                # EXPORT NEW NDR METRICS
                 ndr_tcp_scan_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_s0_rej_count", 0))
                 ndr_max_duration_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_max_duration", 0.0))
+                
+                # Export SOC Enriched Metrics
+                ndr_honeypot_hits_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_honeypot_hits", 0))
+                zeek_ja4_metric.labels(str_dev_id, str_host, str_type).set(feats.get("zeek_ja4_malicious", 0))
+                markov_anomaly_metric.labels(str_dev_id, str_host, str_type).set(markov_anomaly)
 
-                # EXPORT ENRICHED INTERNAL LATERAL TARGETS (SRC, TARGET IP, PORT)
                 new_lat_events = zeek_fx.pop_new_lateral_events(st.client_ip)
                 for dst_ip, dst_port in new_lat_events:
                     ndr_lateral_targets_total.labels(str_dev_id, str_host, str(st.client_ip), str(dst_ip), str(dst_port)).inc()

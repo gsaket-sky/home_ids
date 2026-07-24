@@ -1,5 +1,5 @@
 """
-ml_engine.py – Per-device IsolationForest with global fallback.
+ml_engine.py – Per-device IsolationForest with global fallback and Markov Sequencing.
 Applies unsupervised machine learning models to detect stealthy deviations 
 in standard network traffic behavior that evade typical human-set heuristics.
 
@@ -7,13 +7,14 @@ RECENT FIXES:
 - Enforced a strict 0.05 contamination ceiling to prevent active-infection baseline poisoning.
 - Hardened model fitting pipelines against NaN value injections.
 - FIXED: Upgraded MLRegistry to use OrderedDict for strict LRU cache eviction, preventing active models from dropping.
+- ADDED (SOC): Integrated MarkovStateTracker to mathematically score anomalous kill-chain phase transitions.
 """
 
 import json
 import logging
 import threading
 import time
-from collections import deque, OrderedDict
+from collections import deque, OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -49,6 +50,29 @@ def vectorize(features: dict) -> tuple:
         float(features.get("deep_domains", 0.0) or 0.0),
     )
 
+class MarkovStateTracker:
+    """Evaluates the mathematical probability of network kill-chain phase transitions."""
+    def __init__(self):
+        self.transitions = defaultdict(lambda: defaultdict(int))
+        self.totals = defaultdict(int)
+        self._lock = threading.Lock()
+
+    def learn(self, prev_state: str, curr_state: str) -> None:
+        if not prev_state or prev_state == curr_state:
+            return
+        with self._lock:
+            self.transitions[prev_state][curr_state] += 1
+            self.totals[prev_state] += 1
+
+    def get_anomaly(self, prev_state: str, curr_state: str) -> float:
+        if not prev_state or prev_state == curr_state:
+            return 0.0
+        with self._lock:
+            if self.totals[prev_state] < 10:
+                return 0.0  
+            prob = self.transitions[prev_state][curr_state] / self.totals[prev_state]
+            return 1.0 - prob 
+
 class DeviceMLEngine:
     """Manages training and prediction for an individual device profile."""
     def __init__(self, device_id: str, model_dir: Path):
@@ -59,6 +83,7 @@ class DeviceMLEngine:
         self._scaler = None
         self._retrain_at = _WARMUP
         self._retrain_pending = False
+        self.last_phase = "NORMAL"
         self._lock = threading.Lock()
 
         for path in (self.model_path, self.model_path.with_suffix(".tmp")):
@@ -130,7 +155,6 @@ class DeviceMLEngine:
                 prev_X = snap_scaler.transform(X_raw)
                 if not np.isnan(prev_X).any():
                     prev_scores = np.maximum(0.0, -snap_model.decision_function(prev_X))
-                    # FIX: Cap ceiling at 5% (0.05) strictly to prevent active-infection poisoning
                     contamination = float(np.clip(np.mean(prev_scores > 0.05), 0.001, 0.05))
             except Exception:
                 pass
@@ -306,9 +330,9 @@ class MLRegistry:
     def __init__(self, model_dir: Path, global_model_path: Path):
         self.model_dir = Path(model_dir)
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        # FIX: Ensure strict LRU evaluation by utilizing OrderedDict
         self._devices = OrderedDict()
         self._global = GlobalMLEngine(Path(global_model_path))
+        self.markov = MarkovStateTracker()
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ids_ml")
 
@@ -320,7 +344,6 @@ class MLRegistry:
                     del self._devices[evict]
                 self._devices[device_id] = DeviceMLEngine(device_id, self.model_dir)
             else:
-                # FIX: Push actively scored devices to the end of the queue
                 self._devices.move_to_end(device_id)
             return self._devices[device_id]
 
@@ -342,11 +365,30 @@ class MLRegistry:
             LOGGER.error("Global retrain failed: %s", exc)
         finally:
             self._global.retrain_complete()
+            
+    def _evaluate_phase(self, features: dict) -> str:
+        """Determines the active Kill-Chain phase abstractly based on telemetry."""
+        if features.get("outbound_bytes_z", 0.0) > 3.5:
+            return "EXFIL"
+        elif features.get("zeek_lateral_moves", 0) > 0 or features.get("zeek_s0_rej_count", 0) > 15:
+            return "LATERAL"
+        elif features.get("beaconing_c2_count", 0) > 0 or features.get("zeek_ja4_malicious", 0) > 0 or features.get("zeek_ja3_malicious", 0) > 0:
+            return "C2"
+        elif features.get("new_domains", 0) > 15 or features.get("suspicious_domains", 0) > 0 or features.get("nxdomain_ratio_z", 0.0) > 3.0:
+            return "RECON"
+        return "NORMAL"
 
     def learn(self, device_id: str, features: dict) -> None:
         vec = vectorize(features)
-
+        
+        # Kill-Chain Sequence Learning
+        curr_phase = self._evaluate_phase(features)
         eng = self._get(device_id)
+        
+        if eng.last_phase != curr_phase:
+            self.markov.learn(eng.last_phase, curr_phase)
+            eng.last_phase = curr_phase
+
         eng.learn(vec)
         if eng.needs_retrain():
             samples = list(eng.training)
@@ -358,7 +400,17 @@ class MLRegistry:
 
     def score(self, device_id: str, features: dict) -> float:
         vec = vectorize(features)
+        
+        # Determine the phase and calculate Markov anomaly dynamically
+        curr_phase = self._evaluate_phase(features)
+        features["killchain_phase"] = curr_phase
+        
         eng = self._get(device_id)
+        if eng.last_phase != curr_phase:
+            features["markov_anomaly"] = self.markov.get_anomaly(eng.last_phase, curr_phase)
+        else:
+            features["markov_anomaly"] = 0.0
+
         if eng.warmed_up:
             return eng.score(vec)
         return self._global.score(vec)

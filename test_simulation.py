@@ -1,7 +1,8 @@
 """
 test_simulation.py – End-to-End Logical Test Suite for Home IDS
 Simulates device lifecycles, threat injections, alert deduplication, 
-decay curves, Zeek/Pi-hole race conditions, and IPS Veto logic.
+decay curves, Zeek/Pi-hole race conditions, IPS Veto logic, and 
+advanced SOC scenarios (Honeypots, JA4+, Sequential Kill-Chains).
 """
 
 import time
@@ -36,8 +37,15 @@ def run_simulation():
     extractor = FeatureExtractor()
     scorer = RiskScorer()
     ml = MLRegistry(model_dir="state/test_models", global_model_path="state/test_global.pkl")
+    
     safe_ips = {"127.0.0.1", "192.168.178.94"}
-    zeek_fx = ZeekFeatureExtractor(home_subnets=["192.168.178.0/24"], safe_ips=safe_ips)
+    honeypot_ips = {"192.168.178.200"}
+    
+    zeek_fx = ZeekFeatureExtractor(
+        home_subnets=["192.168.178.0/24"], 
+        safe_ips=safe_ips, 
+        honeypot_ips=honeypot_ips
+    )
 
     states = OrderedDict()
     sim_time = time.time()
@@ -50,17 +58,14 @@ def run_simulation():
     ip = "192.168.178.50"
     host = "Test-Laptop"
 
-    # Step A: Add device
     states[dev_id] = DeviceState(device_id=dev_id, client_ip=ip, hostname=host, alpha=alpha)
     st = states[dev_id]
     st.rate_baseline.update(10.0, 12)
     print(f"✅ Device {host} added. Initial baseline samples: {sum(st.rate_baseline.n)}")
 
-    # Step B: Dynamically add to Safe IPs (Ensuring it does NOT purge in the new architecture)
     safe_ips.add(ip)
     print(f"✅ Device {host} added to safe_ips. State remains in memory for warm baselines: {dev_id in states}")
 
-    # Step C: Remove from Safe IPs & Validate
     safe_ips.remove(ip)
     print(f"⚠️ Device {host} removed from safe_ips. Ready for active tracking.\n")
 
@@ -73,23 +78,23 @@ def run_simulation():
         ("DGA Burst", {"domains": [f"random{i}.ru" for i in range(20)], "status": 3, "zeek_event": None}),
         ("DoH Bypass", {"domains": ["google.com"], "status": 1, "zeek_event": {"type": "ssl", "sni": "cloudflare-dns.com", "uid": "U1"}}),
         ("Lateral SSH", {"domains": ["internal.local"], "status": 1, "zeek_event": {"type": "conn", "dst_ip": "192.168.178.100", "port": 22}}),
-        ("Malicious JA3", {"domains": ["c2.server.com"], "status": 1, "zeek_event": {"type": "ssl", "ja3": "e7d705a3286e19ea42f587b6207263db", "port": 443}})
+        ("Malicious JA3", {"domains": ["c2.server.com"], "status": 1, "zeek_event": {"type": "ssl", "ja3": "e7d705a3286e19ea42f587b6207263db", "port": 443}}),
+        ("Malicious JA4+", {"domains": ["ng-c2.server.com"], "status": 1, "zeek_event": {"type": "ssl", "ja4": "t13d1516h2_8daaf6152771_a0b271d46eb3", "port": 443}}),
+        ("Honeypot Trigger", {"domains": [], "status": 1, "zeek_event": {"type": "conn", "dst_ip": "192.168.178.200", "port": 22}})
     ]
 
     for name, data in threat_scenarios:
-        test_id = f"dev_{name.lower().replace(' ', '_')}"
+        test_id = f"dev_{name.lower().replace(' ', '_').replace('+', '')}"
         test_ip = "192.168.178.60"
         states[test_id] = DeviceState(device_id=test_id, client_ip=test_ip, hostname=f"Host-{name}", alpha=alpha)
         st_t = states[test_id]
 
-        # Inject DNS Queries
         for d in data["domains"]:
             st_t.rolling.events.append((sim_time, d, data["status"]))
             st_t.rolling.domains[d] += 1
             if data["status"] == 3:
                 st_t.rolling.nxdomain += 1
 
-        # Inject Zeek NDR Events
         if data["zeek_event"]:
             zevt = data["zeek_event"]
             if zevt["type"] == "ssl" and "sni" in zevt:
@@ -98,6 +103,8 @@ def run_simulation():
                 zeek_fx._process_conn(test_ip, {"id.resp_h": zevt["dst_ip"], "id.resp_p": zevt["port"]})
             elif zevt["type"] == "ssl" and "ja3" in zevt:
                 zeek_fx._process_ssl(test_ip, {"ja3": zevt["ja3"], "id.resp_p": zevt["port"]})
+            elif zevt["type"] == "ssl" and "ja4" in zevt:
+                zeek_fx._process_ssl(test_ip, {"ja4": zevt["ja4"], "id.resp_p": zevt["port"]})
 
         feats = extractor.compute(st_t, sim_time, window_sec)
         feats.update(zeek_fx.get_features(test_ip))
@@ -107,11 +114,10 @@ def run_simulation():
         risk_details = scorer.explain(feats, st_t, ml_score, zeek_alerts=zeek_alerts)
         risk = risk_details["risk"]
 
-        # Alert Deduplication Fire Loop (Simulate 5 cycles over 2 minutes)
         alerts_fired = 0
         alert_threshold = 6.0
         for cycle in range(5):
-            c_time = sim_time + (cycle * 25)  # 25 seconds apart
+            c_time = sim_time + (cycle * 25) 
             factors = risk_details.get("factors", [])
             sig = factors[0]["name"] if factors else "Threshold Exceeded"
             risk_delta = abs(risk - getattr(st_t, "last_alert_risk", 0.0))
@@ -128,7 +134,7 @@ def run_simulation():
                     if risk <= (alert_threshold - 1.0):
                         st_t.last_alert_risk = 0.0
 
-        print(f"🎯 Threat: {name:<15} | Calculated Risk: {risk:.2f}/10.0 | Alerts Fired in 2m: {alerts_fired} (Deduplicated)")
+        print(f"🎯 Threat: {name:<17} | Calculated Risk: {risk:>5.2f}/10.0 | Alerts Fired in 2m: {alerts_fired} (Deduplicated)")
         zeek_fx.reset_all()
 
     print()
@@ -142,7 +148,6 @@ def run_simulation():
     states[decay_id] = DeviceState(device_id=decay_id, client_ip=decay_ip, hostname="Decay-PC", alpha=alpha)
     st_d = states[decay_id]
 
-    # Step A: Fire massive attack at t = 0
     start_t = sim_time
     for i in range(50):
         st_d.rolling.events.append((start_t, f"malicious{i}.com", 3))
@@ -154,7 +159,6 @@ def run_simulation():
     is_poisoned_peak = risk_peak >= 7.0
     print(f"🔥 Peak Attack (t=0s)    : Risk = {risk_peak:.2f} | Baseline Frozen = {is_poisoned_peak}")
 
-    # Step B: Advance time by 301 seconds (Attack stops, window expires)
     decay_t = start_t + 301
     feats_decay = extractor.compute(st_d, decay_t, window_sec)
     risk_decay = scorer.explain(feats_decay, st_d, 0.0, zeek_alerts=[])["risk"]
@@ -173,17 +177,14 @@ def run_simulation():
     print("--- [TEST 4] Zeek vs Pi-hole Sync & Timing Cliff Race Condition ---")
     sync_ip = "192.168.178.80"
     
-    # Event arrives 2 seconds before the 300-second Zeek reset boundary
     t_zeek = sim_time + 298
     zeek_fx._process_ssl(sync_ip, {"ja3": "e7d705a3286e19ea42f587b6207263db", "id.resp_p": 443})
     
     feats_before_reset = zeek_fx.get_features(sync_ip)
     print(f"⏱️  t=298s (Before Reset): Zeek JA3 Hits Captured = {feats_before_reset['zeek_ja3_malicious']}")
 
-    # Apply rolling prune instead of hard reset
     zeek_fx.prune(sim_time + 300, 300)
     
-    # Pi-hole logs arrive at t=301s
     feats_after_reset = zeek_fx.get_features(sync_ip)
     print(f"⏱️  t=301s (After Prune) : Zeek JA3 Hits Captured = {feats_after_reset['zeek_ja3_malicious']}")
 
@@ -197,7 +198,6 @@ def run_simulation():
     # -------------------------------------------------------------------
     print("--- [TEST 5] IPS Cloudflare DoH Veto & Zero-Day DGA Override ---")
     
-    # Initialize IPS Mitigator in Mock Mode
     mock_config = {
         "ips_enabled": True, 
         "pihole_api_url": "mock", 
@@ -207,15 +207,13 @@ def run_simulation():
     ips = IPSMitigator(config=mock_config)
     mock_st = DummyState(device_id="ips_test_01", hostname="Veto-Tester", ip="192.168.178.99", mac="AA:BB:CC:DD:EE:FF")
 
-    # Sub-Test 5A: The Harmless Veto
-    ips._internet_verification = lambda d: "HARMLESS"  # Mock Cloudflare response
+    ips._internet_verification = lambda d: "HARMLESS" 
     ips.mitigate(mock_st, top_domain="github.com", risk_score=8.5, c2_hits=0, dga_burst=False)
     if "github.com" not in ips.blocked_domains:
         print("✅ [5A] HARMLESS VETO: Successfully aborted Pi-hole block for globally trusted domain.")
     else:
         print("❌ [5A] FAILURE: Harmless domain was blocked!")
 
-    # Sub-Test 5B: The Malicious Agreement
     ips._internet_verification = lambda d: "MALICIOUS"
     ips.mitigate(mock_st, top_domain="evil-c2-server.com", risk_score=8.5, c2_hits=0, dga_burst=False)
     if "evil-c2-server.com" in ips.blocked_domains:
@@ -223,20 +221,61 @@ def run_simulation():
     else:
         print("❌ [5B] FAILURE: Known malware domain was not blocked!")
 
-    # Sub-Test 5C: The Zero-Day DGA Override
-    ips._internet_verification = lambda d: "HARMLESS"  # Cloudflare doesn't know about it yet
+    ips._internet_verification = lambda d: "HARMLESS"
     ips.mitigate(mock_st, top_domain="random-zeroday-dga.xyz", risk_score=9.0, c2_hits=0, dga_burst=True)
     if "random-zeroday-dga.xyz" in ips.blocked_domains:
         print("✅ [5C] ZERO-DAY OVERRIDE: Successfully ignored Veto and blocked active DGA burst.")
     else:
         print("❌ [5C] FAILURE: Zero-Day malware bypassed protection due to Veto!")
 
-    # Sub-Test 5D: Hardware Router Drop (Decoupled check)
     if mock_st.mac_address in ips.isolated_macs:
-        print("✅ [5D] HARDWARE ISOLATION: Router webhook successfully fired regardless of DNS Veto.")
+        print("✅ [5D] HARDWARE ISOLATION: Router webhook successfully fired regardless of DNS Veto.\n")
     else:
-        print("❌ [5D] FAILURE: Router isolation failed to execute!")
+        print("❌ [5D] FAILURE: Router isolation failed to execute!\n")
 
+    # -------------------------------------------------------------------
+    # TEST 6: SEQUENTIAL KILL-CHAIN ANALYSIS (MARKOV TRANSITIONS)
+    # -------------------------------------------------------------------
+    print("--- [TEST 6] Sequential Kill-Chain Analysis (Markov Transitions) ---")
+    kc_id = "killchain_device"
+    kc_ip = "192.168.178.90"
+    states[kc_id] = DeviceState(device_id=kc_id, client_ip=kc_ip, hostname="KillChain-PC", alpha=alpha)
+    st_kc = states[kc_id]
+
+    # Phase 1: RECON (Triggered by NXDOMAIN volume)
+    feats_recon = extractor._zero_features()
+    feats_recon["nxdomain_ratio_z"] = 4.0
+    ml.score(kc_id, feats_recon) # ML Engine registers the phase and evaluates Markov Shift
+    risk_recon_details = scorer.explain(feats_recon, st_kc, 0.0)
+    print(f"🕵️  Phase 1 (RECON)   : Risk = {risk_recon_details['risk']:.2f} | Abstract History = {list(st_kc.killchain_history)}")
+
+    # Phase 2: C2 (Triggered by mechanical Jitter / Beaconing)
+    feats_c2 = extractor._zero_features()
+    feats_c2["beaconing_c2_count"] = 5
+    ml.score(kc_id, feats_c2) 
+    risk_c2_details = scorer.explain(feats_c2, st_kc, 0.0)
+    risk_c2 = risk_c2_details["risk"]
+    factors_c2 = [f["name"] for f in risk_c2_details["factors"]]
+    print(f"📡 Phase 2 (C2)      : Risk = {risk_c2:.2f} | Abstract History = {list(st_kc.killchain_history)}")
+    
+    if "Sequential Kill-Chain Detected" in factors_c2:
+        print("   ✅ SUCCESS: Deterministic Kill-Chain penalty successfully applied (+8.0)")
+    else:
+        print("   ❌ FAILURE: Did not register RECON -> C2 pattern.")
+
+    # Phase 3: LATERAL (Triggered by Internal Network Scanning)
+    feats_lat = extractor._zero_features()
+    feats_lat["zeek_lateral_moves"] = 10
+    ml.score(kc_id, feats_lat)
+    risk_lat_details = scorer.explain(feats_lat, st_kc, 0.0)
+    risk_lat = risk_lat_details["risk"]
+    factors_lat = [f["name"] for f in risk_lat_details["factors"]]
+    print(f"🗡️  Phase 3 (LATERAL) : Risk = {risk_lat:.2f} | Abstract History = {list(st_kc.killchain_history)}")
+    
+    if "Sequential Kill-Chain Detected" in factors_lat:
+        print("   ✅ SUCCESS: Deep lateral Kill-Chain progression tracked across sequence.")
+    else:
+        print("   ❌ FAILURE: Did not register C2 -> LATERAL pattern.")
 
     print("\n=================================================================")
     print(" 🏁 SIMULATION COMPLETE: ALL LOGIC SCENARIOS EVALUATED          ")

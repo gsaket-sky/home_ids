@@ -38,6 +38,9 @@
       "127.0.0.1",
       "192.168.178.94"
     ],
+    "honeypot_ips": [
+      "192.168.178.200"
+    ],
     "safe_domains": [
       "teams.events.data.microsoft.com",
       "login.microsoftonline.com",
@@ -81,6 +84,7 @@
     "poll_interval": "2s kept — optimal, Pi-hole DB is event-driven not time-driven",
     "alert_threshold": "6.0 kept — well-calibrated after FP sensitivity fixes",
     "home_subnet": "192.168.178.0/24 — matches the 192.168.178.94 safe_ips entry above. Update if your router's LAN differs.",
-    "geoip_asn_db": "Empty = ASN/org metrics stay 'unknown' (same as before). Set a GeoLite2-ASN.mmdb path to enable them."
+    "geoip_asn_db": "Empty = ASN/org metrics stay 'unknown' (same as before). Set a GeoLite2-ASN.mmdb path to enable them.",
+    "honeypot_ips": "Deploy an unused IP address on your LAN (e.g. 192.168.178.200) running a fake SSH/SMB listener. Any device connecting to this IP receives an instant 10.0 Risk Score."
   }
 }

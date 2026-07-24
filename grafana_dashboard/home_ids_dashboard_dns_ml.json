@@ -29,24 +29,24 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🤖 Threat: ML Behavioral Anomalies & Risk Velocity\n**How to read this section:** The IsolationForest AI engine tracks how a device historically behaves and flags extreme deviations. \n* 🟢 **Normal:** ML Score stays very close to 0.00.\n* 🔴 **Threat Hunt:** An ML Score > 0.05 means the device is acting 'out of character'. If accompanied by high Risk Velocity, the device suddenly drastically changed its behavior in the last 5 minutes. Check the Loki logs to see *which* features (like query rate or unique domains) triggered the AI."
+        "content": "### 🤖 Threat: Machine Learning & Markov Kill-Chain Sequences\n* 🟢 **Normal:** ML and Markov anomaly scores remain near 0.00.\n* 🔴 **Threat Hunt:** IsolationForest detects volumetric matrix shifts. Markov Chain scores > 0.90 indicate improbable sequence transitions (e.g., jumping from `RECON` $\rightarrow$ `C2` $\rightarrow$ `EXFIL`)."
       }
     },
     {
       "type": "timeseries",
       "title": "ML Anomaly Score (IsolationForest)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "targets": [ { "expr": "home_ids_ml_anomaly_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} (IsolationForest)" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 } ] }, "custom": { "fillOpacity": 0, "lineWidth": 2 } } }
     },
     {
-      "type": "stat",
-      "title": "Max ML Score",
-      "gridPos": { "h": 8, "w": 4, "x": 12, "y": 5 },
+      "type": "timeseries",
+      "title": "Markov Sequence Transition Anomaly",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "max(home_ids_ml_anomaly_score{hostname=~\"$device\"})" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 0.05 } ] } } }
+      "targets": [ { "expr": "home_ids_markov_anomaly_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} (Markov Anomaly)" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 0.9 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "fillOpacity": 15, "lineWidth": 2 } } }
     },
     {
       "type": "timeseries",
@@ -58,10 +58,10 @@
     },
     {
       "type": "logs",
-      "title": "🔎 Filtered Workspace: ML Mathematical Outliers (Loki)",
+      "title": "🔎 Filtered Workspace: ML & Markov Sequence Outliers (Loki)",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
       "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} | json | device_hostname=~\"$device\" |~ \"(?i)ml anomaly|risk velocity\"" } ],
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)ml anomaly|risk velocity|markov|sequential kill-chain\" | json | device_hostname=~\"$device\"" } ],
       "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
     },
     {
@@ -71,7 +71,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🚨 Threat: Ransomware, DGA & Evasion\n**How to hunt DGA (Domain Generation Algorithms):** Malware uses DGA to randomly guess thousands of gibberish domains (e.g., `xkqztp.ru`) to find a hidden server. \n* 🔴 **Threat Hunt:** Look for a simultaneous vertical spike in **New Domains** AND **NXDOMAIN Ratio** (failures). If NXDOMAIN TLD Concentration is > 80%, the malware is hyper-focusing its failed guesses on a specific suffix like `.ru`.\n**How to hunt Evasion (Blocked Ratio):**\n* 🟡 **Benign:** Smart TVs hitting 80% Blocked Ratio is normal ad-blocker noise. The Z-Score will be low (between -2 and +2).\n* 🔴 **Threat Hunt:** If Blocked Z-Score > 4.0, a device is wildly surging its attempts to bypass Pi-hole restrictions. Check the Loki logs to see *which* domain is being spammed."
+        "content": "### 🚨 Threat: Ransomware, DGA & Evasion\n* 🔴 **Threat Hunt:** Look for a simultaneous vertical spike in **New Domains** AND **NXDOMAIN Ratio**. If Blocked Z-Score > 4.0, a device is wildly surging its attempts to bypass Pi-hole restrictions."
       }
     },
     {
@@ -129,55 +129,6 @@
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
       "targets": [ { "expr": "home_ids_zscore_blocked_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 4 } ] }, "custom": { "fillOpacity": 10 } } }
-    },
-    {
-      "type": "logs",
-      "title": "🔎 Filtered Workspace: Ransomware, Block Evasion & DGA (Loki)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
-      "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)nxdomain ratio|blocked dns ratio|suspicious.*dga|first-seen domain burst|nxdomain tld concentration|probationary|correlated dns baseline\" | json | device_hostname=~\"$device\"" } ],
-      "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
-    },
-    {
-      "type": "text",
-      "title": "📖 Analyst Field Guide: Adaptive Corridor",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 49 },
-      "transparent": true,
-      "options": {
-        "mode": "markdown",
-        "content": "### 📈 Threat: Query Saturation\n**How to read this section:** The corridor chart overlays live traffic against its own established mathematical 'norm' based on the time of day.\n* 🔴 **Threat Hunt:** Solid traffic lines breaking violently through the dotted red 'Threat Limit' ceiling triggers volume alerts."
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Threat Thresholds vs Safe Baseline Corridor (Query Rate)",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 52 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [
-        { "expr": "home_ids_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Live" },
-        { "expr": "home_ids_query_rate_baseline_mean{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Mean" },
-        { "expr": "home_ids_query_rate_threshold_limit{hostname=~\"$device\"}", "legendFormat": "{{hostname}} - Limit" }
-      ],
-      "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 0, "lineWidth": 2 } },
-        "overrides": [
-          { "matcher": { "id": "byRegexp", "options": ".*Mean.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [ 10, 10 ], "fill": "dash" } }, { "id": "custom.lineWidth", "value": 1 } ] },
-          { "matcher": { "id": "byRegexp", "options": ".*Limit.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [ 5, 5 ], "fill": "dash" } }, { "id": "custom.fillBelowTo", "value": ".*Mean.*" }, { "id": "custom.fillOpacity", "value": 15 }, { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } } ] }
-        ]
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Baseline Deviations (Z-Scores) — Behavioral Threats",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 52 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [
-        { "expr": "home_ids_zscore_query_rate{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Query-Z" },
-        { "expr": "home_ids_zscore_nxdomain_ratio{hostname=~\"$device\"}", "legendFormat": "{{hostname}} NX-Z" },
-        { "expr": "home_ids_zscore_suspicious_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} DGA-Z" },
-        { "expr": "home_ids_zscore_unique_domains{hostname=~\"$device\"}", "legendFormat": "{{hostname}} Unique-Z" }
-      ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 3 }, { "color": "red", "value": 6 } ] }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } }
     }
   ]
 }

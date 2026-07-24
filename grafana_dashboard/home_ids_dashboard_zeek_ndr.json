@@ -49,39 +49,39 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🚨 Threat: Defense Evasion & Lateral Movement\n**How to hunt:** Zeek monitors physical network flow, catching threats that DNS misses. Charts use 'Step' tracking: if a line jumps up and drops a red point, an event fired.\n* 🔴 **Threat Hunt (Evasion):** DoH Bypass > 0 means malware is encrypting its DNS via Cloudflare to blind your Pi-hole. JA3 Hits > 0 means the device is using a known malware TLS certificate.\n* 🔴 **Threat Hunt (Lateral Scans):** If Lateral Movement hits spike, a device is attacking your own network. Check the **Internal Lateral Matrix** table below to see the exact target IP and port. If S0/REJ states spike, the device is blindly port-scanning."
+        "content": "### 🚨 Threat: Cryptographic Fingerprinting, Evasion & Deception\n* 🔴 **JA3 / JA4+ Fingerprints:** Identifies software applications by their TLS handshake signature, catching encrypted malware tools even under TLS 1.3 encryption.\n* 🔴 **Honeypot Deception Hits:** Instant proof of infection. Any device touching an internal restricted decoy listener immediately triggers a 10.0 Risk Score penalty."
       }
     },
     {
       "type": "timeseries",
-      "title": "DoH Bypass Attempts (Cloudflare, Google, Quad9)",
+      "title": "JA3 Malicious TLS Hits",
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_zeek_doh_bypass{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "targets": [ { "expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}", "legendFormat": "{{hostname}} (JA3)" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 5, "fillOpacity": 20 } } }
     },
     {
       "type": "timeseries",
-      "title": "Internal Lateral Movement (SSH, RDP, SMB scanning)",
+      "title": "JA4+ Next-Gen TLS Hits",
       "gridPos": { "h": 8, "w": 6, "x": 6, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_zeek_lateral_moves{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "targets": [ { "expr": "home_ids_zeek_ja4_malicious{hostname=~\"$device\"}", "legendFormat": "{{hostname}} (JA4+)" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 5, "fillOpacity": 20 } } }
     },
     {
       "type": "timeseries",
-      "title": "Suspicious Ext Ports",
+      "title": "Deception Honeypot Hits (Restricted Decoys)",
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_zeek_suspicious_ports{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 80 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 5, "fillOpacity": 20 } } }
+      "targets": [ { "expr": "home_ids_zeek_honeypot_hits{hostname=~\"$device\"}", "legendFormat": "{{hostname}} (Honeypot)" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 7, "fillOpacity": 30 } } }
     },
     {
       "type": "timeseries",
-      "title": "JA3 Malicious TLS Hits",
+      "title": "DoH Bypass Attempts",
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_zeek_ja3_malicious{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
+      "targets": [ { "expr": "home_ids_zeek_doh_bypass{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 5, "fillOpacity": 20 } } }
     },
     {
@@ -91,7 +91,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### 🎯 Threat: Lateral Matrix & Port Reconnaissance\n* 🔴 **Threat Hunt:** Use this table to map the blast radius of a compromised machine. The 'Target Port' reveals the attacker's goal (Port 22 = Brute-forcing SSH, Port 445 = Spreading ransomware via SMB/Windows file sharing)."
+        "content": "### 🎯 Threat: Lateral Matrix & Port Reconnaissance\n* 🔴 **Threat Hunt:** Maps internal scan targets and port failures. Target ports reveal attacker intent (e.g., Port 22 = SSH, Port 445 = SMB/Ransomware)."
       }
     },
     {
@@ -153,45 +153,11 @@
       "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 14400 }, { "color": "red", "value": 43200 } ] }, "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
     },
     {
-      "type": "text",
-      "title": "📖 Analyst Field Guide: Data Exfiltration & C2",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 33 },
-      "transparent": true,
-      "options": {
-        "mode": "markdown",
-        "content": "### 🚨 Threat: Data Exfiltration & C2 Beaconing\n* 🔴 **Threat Hunt (Exfiltration):** A massive spike in 'Outbound Bytes Z-Score' (> 5.0) means an attacker is actively stealing data or dumping a large payload to the internet. \n* 🔴 **Threat Hunt (C2 Beaconing):** Malware 'beacons' a hacker's server periodically. If a bar appears in the Jitter CV chart, Zeek tracked a connection with robotic, mechanical timing precision (< 10% variance). This is a confirmed Command & Control channel."
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "TCP/UDP Data Exfiltration Z-Score (Outbound Bytes)",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 37 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_outbound_bytes_zscore{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 3 }, { "color": "red", "value": 5 } ] }, "custom": { "fillOpacity": 15, "lineWidth": 2 } } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Machine C2 Beaconing (Jitter CV < 0.1)",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 37 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_beaconing_c2_count{hostname=~\"$device\"}", "legendFormat": "{{hostname}}" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] }, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "showPoints": "always", "pointSize": 5, "fillOpacity": 20 } } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Minimum Timing Coefficient of Variation (Jitter)",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 37 },
-      "datasource": { "type": "prometheus", "uid": "${PROMETHEUS_DS}" },
-      "targets": [ { "expr": "home_ids_jitter_cv_score{hostname=~\"$device\"}", "legendFormat": "{{hostname}} CV Token" } ],
-      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": 0 }, { "color": "green", "value": 0.1 } ] }, "custom": { "fillOpacity": 0 } } }
-    },
-    {
       "type": "logs",
-      "title": "🔎 Filtered Workspace: Defense Evasion & Lateral Movements (Loki)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 45 },
+      "title": "🔎 Filtered Workspace: Defense Evasion, Honeypots & Lateral Movements (Loki)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
       "datasource": { "type": "loki", "uid": "${LOKI_DS}" },
-      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)doh tunneling bypass|internal lateral movement|suspicious destination port|zeek notice|exfiltration payload burst|jitter clock verification|single-domain beaconing|port scan|covert tunnel\" | json | device_hostname=~\"$device\"" } ],
+      "targets": [ { "expr": "{job=\"home_ids_alerts\", environment=\"production\"} |~ \"(?i)doh tunneling bypass|internal lateral movement|suspicious destination port|zeek notice|exfiltration payload burst|jitter clock verification|single-domain beaconing|port scan|covert tunnel|honeypot|ja4|markov\" | json | device_hostname=~\"$device\"" } ],
       "options": { "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true }
     }
   ]

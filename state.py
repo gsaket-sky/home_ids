@@ -9,6 +9,7 @@ RECENT FIXES:
   dictionary to prevent parallel memory explosion during sustained DGA floods.
 - FIXED: Persisted last_baseline_update through state serialization to prevent 
   artificial baseline skewing upon engine restarts.
+- ADDED (SOC): Implemented persistent killchain_history tracker to map state execution.
 """
 from collections import deque, defaultdict
 
@@ -71,8 +72,6 @@ class RollingWindow:
             sorted_domains = sorted(self.domains.items(), key=lambda x: x[1], reverse=True)[:5000]
             self.domains = defaultdict(int, sorted_domains)
             
-            # FIX: Synchronize the domain_timestamps dictionary to prevent parallel memory leak
-            # Identify keys to delete to avoid "dictionary changed size during iteration" errors
             keys_to_remove = [k for k in self.domain_timestamps if k not in self.domains]
             for k in keys_to_remove:
                 del self.domain_timestamps[k]
@@ -92,9 +91,10 @@ class DeviceState:
         self.last_alert_time = 0.0
         self.last_alert_risk = 0.0
         self.last_alert_signature = ""
-        
-        # FIX: Natively declare baseline update tracker
         self.last_baseline_update = 0.0
+        
+        # SOC: Sequence State Tracker
+        self.killchain_history = deque(maxlen=5)
         
         self.rate_baseline = BaselineMetric(alpha)
         self.entropy_baseline = BaselineMetric(alpha)
@@ -117,6 +117,7 @@ class DeviceState:
             "last_alert_risk": self.last_alert_risk,
             "last_alert_signature": self.last_alert_signature,
             "last_baseline_update": self.last_baseline_update,
+            "killchain_history": list(self.killchain_history),
             "rate_baseline": self.rate_baseline.to_dict(),
             "entropy_baseline": self.entropy_baseline.to_dict(),
             "unique_baseline": self.unique_baseline.to_dict(),
@@ -144,9 +145,10 @@ class DeviceState:
         st.last_alert_time = data.get("last_alert_time", 0.0)
         st.last_alert_risk = data.get("last_alert_risk", 0.0)
         st.last_alert_signature = data.get("last_alert_signature", "")
-        
-        # FIX: Restore baseline timestamp natively from disk
         st.last_baseline_update = data.get("last_baseline_update", 0.0)
+        
+        # Restore abstract Kill-Chain sequences
+        st.killchain_history = deque(data.get("killchain_history", []), maxlen=5)
         
         if "rate_baseline" in data: 
             st.rate_baseline = BaselineMetric.from_dict(data["rate_baseline"])

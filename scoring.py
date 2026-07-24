@@ -13,6 +13,9 @@ RECENT FIXES:
   are now fully monitored on routers, gateways, and DNS servers while skipping soft volume noise.
 - ADDED (FEATURE): Integrated TCP Port Scan (S0/REJ) detection rules with immediate IPS trigger ceilings.
 - ADDED (FEATURE): Integrated Covert Tunnel / Reverse Shell rules based on extended session durations.
+- ADDED (SOC): Integrated Deception Technology (Honeypot) unmitigable 10.0 risk penalties.
+- ADDED (SOC): Integrated Next-Gen Cryptography (JA4+) isolation penalties.
+- ADDED (SOC): Built deterministic Sequential Kill-Chain logic evaluating Markov phase shifts.
 """
 from utils import is_telemetry_domain
 import math
@@ -37,7 +40,6 @@ _DEVICE_SENSITIVITY = {
     "phone":          1.0,
     "laptop":         1.0,
     "unknown":        1.0,
-    # Core infrastructure devices use 0.0 sensitivity to signal specialized baseline filtering
     "dns_server":     0.0,
     "router":         0.0,
     "gateway":        0.0,
@@ -64,16 +66,38 @@ class RiskScorer:
 
         device_type = getattr(state, "device_type", None) or "unknown"
         is_mobile = device_type in ["phone", "tablet"]
-        
-        # Mobile devices naturally behave erratically as they jump between networks and cell towers
         mobile_dampener = 0.2 if is_mobile else 1.0
         
         sens = _DEVICE_SENSITIVITY.get(device_type, 1.0)
-        
-        # FIX: Establish a state flag to handle infrastructure devices dynamically.
-        # This prevents routers and gateways from achieving 100% blind immunity to deterministic threats.
         is_infra = (sens <= 0.0)
         amplifier = min(1.0 / max(sens, 0.1), 1.25) if not is_infra else 1.0
+
+        # =====================================================================
+        # KILL-CHAIN SEQUENCE EXTRACTION & EVALUATION
+        # =====================================================================
+        phase = features.get("killchain_phase", "NORMAL")
+        markov_anomaly = safe_float(features.get("markov_anomaly", 0.0))
+
+        if phase != "NORMAL":
+            if not hasattr(state, "killchain_history"):
+                state.killchain_history = __import__('collections').deque(maxlen=5)
+            
+            # Avoid spamming sequential entries if the device stays in the same phase
+            if not state.killchain_history or state.killchain_history[-1] != phase:
+                state.killchain_history.append(phase)
+                LOGGER.warning("Device %s entered anomalous Kill-Chain phase: %s", getattr(state, "hostname", "unknown"), phase)
+
+        history = list(getattr(state, "killchain_history", []))
+        
+        if len(history) >= 2:
+            # Deterministic Kill-Chain Paths
+            seq = " -> ".join(history[-3:])
+            if "RECON -> C2" in seq or "C2 -> EXFIL" in seq or "C2 -> LATERAL" in seq:
+                add("Sequential Kill-Chain Detected", 8.0, None, f"Deterministic sequence execution pattern matched: {seq}")
+
+        if markov_anomaly > 0.95 and phase != "NORMAL":
+            add("Anomalous Phase Transition (Markov)", 3.0, round(markov_anomaly, 2), f"Highly irregular behavioral phase shift to {phase} (P < 0.05)")
+
 
         # 1. Feature Extraction & Coercion
         qz   = safe_float(features.get("query_rate_z"), 0.0)
@@ -94,7 +118,6 @@ class RiskScorer:
         total = safe_float(features.get("total", 0), 0.0)
         unique_domains = safe_float(features.get("unique_domains", 1.0), 1.0)
 
-        # DNS logic naturally relies on volume to confirm intent.
         volume_dampener = 1.0 if total >= 100.0 else max(0.1, total / 100.0)
 
         st_domains = getattr(state.rolling, "domains", {}) if hasattr(state, "rolling") else {}
@@ -205,10 +228,7 @@ class RiskScorer:
         # =====================================================================
         # HARD CORE NETWORK TELEMETRY (ZEEK / NDR) - ABSOLUTE TRUTHS
         # =====================================================================
-        # Absolute network truths bypass the volume dampeners and mobile dampeners 
-        # completely. This guarantees that compromised infrastructure alerts instantly.
 
-        # 1. Data Exfiltration (Outbound Bytes Z-Score)
         outbound_bytes_z = safe_float(features.get("outbound_bytes_z", 0.0), 0.0)
         if outbound_bytes_z > 5.0:
             LOGGER.warning("Exfiltration spike factored for %s (Z=%.2f)", getattr(state, "hostname", "unknown"), outbound_bytes_z)
@@ -216,35 +236,34 @@ class RiskScorer:
         elif outbound_bytes_z > 3.5:
             add("Anomalous Outbound Traffic", 4.0, round(outbound_bytes_z, 2), f"Elevated outbound data (Z: {outbound_bytes_z:.2f})")
 
-        # 2. Internal Lateral Movement (Worm/Pivot Scanning)
         lateral_moves_count = safe_float(features.get("zeek_lateral_moves", 0), 0.0)
         if lateral_moves_count > 0:
             LOGGER.warning("Internal Lateral Movement factored for %s", getattr(state, "hostname", "unknown"))
             add("Internal Lateral Movement", 7.0, min(lateral_moves_count, 1000), f"Device scanning internal restricted ports ({int(lateral_moves_count)} hits)")
 
-        # 3. Encrypted Malware Transport (JA3)
         zeek_ja3 = safe_float(features.get("zeek_ja3_malicious", 0), 0.0)
         if zeek_ja3 > 0 and not zeek_alerts:
             LOGGER.critical("JA3 Malicious signature factored into risk score for %s", getattr(state, "hostname", "unknown"))
             add("Malicious TLS Fingerprint (JA3)", 7.0, min(zeek_ja3, 100), f"Known malware cryptographic handshake ({int(zeek_ja3)} hits)")
+            
+        zeek_ja4 = safe_float(features.get("zeek_ja4_malicious", 0), 0.0)
+        if zeek_ja4 > 0:
+            LOGGER.critical("JA4+ Malicious signature factored into risk score for %s", getattr(state, "hostname", "unknown"))
+            add("Malicious TLS Fingerprint (JA4+)", 7.5, min(zeek_ja4, 100), f"Next-Gen malware cryptographic handshake ({int(zeek_ja4)} hits)")
 
-        # 4. Defense Evasion (DoH Bypass)
         doh_bypass_count = safe_float(features.get("zeek_doh_bypass", 0), 0.0)
         if doh_bypass_count > 0:
             LOGGER.warning("DoH bypass factored for %s", getattr(state, "hostname", "unknown"))
             add("DoH Tunneling / Evasion", 5.0, min(doh_bypass_count, 100), f"Direct upstream encrypted DNS bypass ({int(doh_bypass_count)} hits)")
 
-        # 5. Suspicious External Ports
         zeek_ports = safe_float(features.get("zeek_susp_ports", 0), 0.0)
         if zeek_ports > 0:
             add("Suspicious destination port", 3.0, min(zeek_ports, 100), f"Connecting to non-standard external ports ({int(zeek_ports)} hits)")
 
-        # 6. C2 Jitter Clock Verification
         c2_jitter_count = safe_float(features.get("beaconing_c2_count", 0), 0.0)
         if c2_jitter_count > 0:
             add("C2 Jitter Clock Verification", 6.0, min(c2_jitter_count, 100), f"Uniform periodicity check-in sequences tracked ({int(c2_jitter_count)} hits)")
 
-        # 7. TCP Port Scan Detection (S0 / REJ)
         s0_rej = safe_float(features.get("zeek_s0_rej_count", 0), 0.0)
         if s0_rej > 50:
             LOGGER.warning("Active TCP Port Scan factored for %s", getattr(state, "hostname", "unknown"))
@@ -252,13 +271,17 @@ class RiskScorer:
         elif s0_rej > 15:
             add("Suspicious Connection Failures", 3.5, min(s0_rej, 5000), f"Elevated rejected/unanswered connections ({int(s0_rej)} hits)")
 
-        # 8. Long-lived Connection (Reverse Shell / Tunnel)
         max_dur = safe_float(features.get("zeek_max_duration", 0), 0.0)
-        if max_dur > 43200: # 12 hours
+        if max_dur > 43200: 
             LOGGER.warning("Persistent long-lived connection factored for %s", getattr(state, "hostname", "unknown"))
             add("Covert Tunnel / Reverse Shell", 6.5, round(max_dur, 1), f"Extremely long connection duration ({int(max_dur)}s)")
-        elif max_dur > 14400: # 4 hours
+        elif max_dur > 14400: 
             add("Long-lived Connection", 3.0, round(max_dur, 1), f"Suspiciously long session duration ({int(max_dur)}s)")
+
+        honeypot_hits = safe_float(features.get("zeek_honeypot_hits", 0), 0.0)
+        if honeypot_hits > 0:
+            LOGGER.critical("HONEYPOT DECEPTION TRIGGERED by %s", getattr(state, "hostname", "unknown"))
+            add("Honeypot Deception Triggered", 10.0, honeypot_hits, f"Device accessed an internal restricted decoy listener ({int(honeypot_hits)} hits)")
 
         # =====================================================================
         # ZEEK ANOMALY SIGNATURES
@@ -278,6 +301,8 @@ class RiskScorer:
                 atype = alert.get("type", "")
                 if atype == "malicious_ja3":
                     add("Zeek malicious JA3 alert", conf * 5.0, alert.get("ja3", ""), alert.get("server", ""))
+                elif atype == "malicious_ja4":
+                    add("Zeek malicious JA4+ alert", conf * 6.0, alert.get("ja4", ""), alert.get("server", ""))
                 elif atype == "zeek_notice":
                     note = alert.get("note", "")
                     if note in _BENIGN_ZEEK_WEIRD:
@@ -293,7 +318,6 @@ class RiskScorer:
         # =====================================================================
         risk = sum(f["score"] for f in factors)
         
-        # Apply infrastructure multiplier adjustment explicitly
         if amplifier != 1.0 and risk > 0 and not is_infra:
             before = risk
             risk *= amplifier

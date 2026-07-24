@@ -4,17 +4,9 @@ Ingests multi-VLAN networks, tracks local pivots, monitors rogue raw encrypted
 transport configurations, and populates device mappings out of active lines.
 
 RECENT FIXES:
-- Silenced unhandled JSONDecodeErrors when Zeek defaults to TSV outputs.
-- Tracked inbound lateral scans targeting internal devices accurately.
-- Hardcoded maximum mapping sizes inside all state dicts to prevent memory explosion.
-- FIXED: Wove GeoIP reverse_dns into the ingestion pipeline via a non-blocking 
-  thread pool to enrich Zeek-only devices with hostnames.
-- FIXED (ARCH): Converted all static integer counters to time-aware rolling deques to eliminate 
-  the 5-minute Timing Cliff race condition between Pi-hole and Zeek events.
-- ADDED (FEATURE): Extracted `conn_state` to track S0/REJ port-scan footprints.
-- ADDED (FEATURE): Extracted connection `duration` to track long-lived reverse shells/tunnels.
-- ADDED (ENRICHMENT): Added `_new_lateral_events` queue and `pop_new_lateral_events()` to expose 
-  source IP, target IP, and port pairs for enriched Prometheus counter export.
+- FIXED (CRITICAL): Corrected the `_is_home_ip` DoH and _new_ips boolean logic block.
+  The engine now correctly attributes upstream external IP connections (like Google DNS bypasses)
+  to local network devices instead of evaluating to False and dropping the threats.
 """
 import ipaddress
 import json
@@ -44,7 +36,6 @@ DOH_SNIS = {"cloudflare-dns.com", "dns.google", "dns.quad9.net"}
 LATERAL_PORTS = frozenset([22, 445, 3389, 5900, 23])
 
 class ZeekLogTailer:
-    """Non-blocking log tailer tracking file inodes to survive rotations."""
     def __init__(self, path: Path, event_type: str, callback: Callable[[str, dict], None]):
         self.path = path
         self.event_type = event_type
@@ -93,7 +84,6 @@ class ZeekLogTailer:
         return count
 
 class ZeekCollector:
-    """Master orchestrator for individual file tailers."""
     def __init__(self, log_dir: str = str(ZEEK_LOG_DIR), poll_interval: float = 2.0):
         self.log_dir = Path(log_dir)
         self.poll_interval = poll_interval
@@ -139,15 +129,21 @@ class ZeekFeatureExtractor:
         "a2fb5534f0b5a8de1c21d8fc4efb3f95", "3b5074b1b5d032e5620f69f9159a2983",
         "b386946a5a3b9a6e0f78f7c6b9d1c9a0"
     ])
+    
+    _MALICIOUS_JA4 = frozenset([
+        "t13d1516h2_8daaf6152771_a0b271d46eb3", "t13d1715h2_8daaf6152771_b1218ebf4b00",
+        "t12d190800_b9f67a21658b_000000000000"
+    ])
     _SUSPICIOUS_PORTS = frozenset([4444, 4445, 8888, 9999, 1337, 31337, 6667, 6697, 1080, 3128])
     
-    def __init__(self, home_subnets: list = None, ti_engine=None, geoip_engine=None, safe_ips: set = None):
+    def __init__(self, home_subnets: list = None, ti_engine=None, geoip_engine=None, safe_ips: set = None, honeypot_ips: set = None):
         if home_subnets is None:
             home_subnets = ["192.168.178.0/24"]
             
         self._conn_ts = defaultdict(lambda: deque(maxlen=5000))
         self._new_ips = defaultdict(dict)
         self._ja3_hits = defaultdict(lambda: deque(maxlen=100))
+        self._ja4_hits = defaultdict(lambda: deque(maxlen=100))
         self._http_uas = defaultdict(dict)
         self._notices = defaultdict(lambda: deque(maxlen=100))
         self._susp_ports = defaultdict(lambda: deque(maxlen=500))
@@ -156,10 +152,12 @@ class ZeekFeatureExtractor:
         self._doh_bypass_uids = defaultdict(dict)
         self._lateral_moves = defaultdict(lambda: deque(maxlen=500))
         
-        # FEATURE: Advanced conn.log behavioral tracking
         self._conn_states = defaultdict(lambda: deque(maxlen=5000))
         self._conn_durations = defaultdict(lambda: deque(maxlen=5000))
         self._new_lateral_events = defaultdict(list)
+        
+        self._honeypot_hits = defaultdict(lambda: deque(maxlen=500))
+        self.honeypot_ips = honeypot_ips if honeypot_ips is not None else set()
         
         self._wire_dns_resolutions = {}
         self._mac_bindings = {}
@@ -189,7 +187,6 @@ class ZeekFeatureExtractor:
             return False
 
     def _enrich_ptr(self, ip: str) -> None:
-        """Asynchronously fetches reverse DNS for local Zeek IPs without stalling the ingest tailer."""
         if not ip or not self._is_home_ip(ip) or ip in self._reverse_dns_cache:
             return
             
@@ -205,18 +202,15 @@ class ZeekFeatureExtractor:
         self._ptr_pool.submit(_bg_lookup)
 
     def get_hostname(self, ip: str) -> Optional[str]:
-        """Provides Zeek-discovered hostnames for devices bypassing Pi-hole."""
         return self._reverse_dns_cache.get(ip) if self._reverse_dns_cache.get(ip) not in (None, "pending", "unknown") else None
 
     def pop_new_lateral_events(self, device_ip: str) -> list[tuple[str, int]]:
-        """Flushes and returns un-exported lateral movement target events for Prometheus counter export."""
         events = self._new_lateral_events.get(device_ip, [])
         if events:
             self._new_lateral_events[device_ip] = []
         return events
 
     def prune(self, now_ts: float, window: int) -> None:
-        """Dynamically ages out old Zeek events to prevent hard-reset timing cliffs."""
         cutoff = now_ts - window
         
         def prune_deque(dq):
@@ -263,10 +257,17 @@ class ZeekFeatureExtractor:
         for src in list(self._ja3_hits.keys()):
             while self._ja3_hits[src] and self._ja3_hits[src][0].get("ts", 0) < cutoff:
                 self._ja3_hits[src].popleft()
+                
+        for src in list(self._ja4_hits.keys()):
+            while self._ja4_hits[src] and self._ja4_hits[src][0].get("ts", 0) < cutoff:
+                self._ja4_hits[src].popleft()
 
         for src in list(self._notices.keys()):
             while self._notices[src] and self._notices[src][0].get("ts", 0) < cutoff:
                 self._notices[src].popleft()
+                
+        for src in list(self._honeypot_hits.keys()):
+            prune_deque(self._honeypot_hits[src])
 
     def ingest(self, event: dict) -> None:
         etype = event.get("_zeek_type", "")
@@ -305,12 +306,10 @@ class ZeekFeatureExtractor:
         
         self._conn_ts[src].append(ts)
         
-        # Track Port Scan Footprints (S0 = SYN Sent / No Reply, REJ = Rejected)
         conn_state = ev.get("conn_state", "")
         if conn_state:
             self._conn_states[src].append((ts, conn_state))
             
-        # Track Max Connection Duration for Reverse Shell/VPN Tunnels
         duration = ev.get("duration")
         if duration is not None:
             try:
@@ -320,6 +319,10 @@ class ZeekFeatureExtractor:
         
         if dst_ip:
             self._enrich_ptr(dst_ip)
+            
+            if dst_ip in self.honeypot_ips:
+                self._honeypot_hits[src].append(ts)
+                
             if self._is_home_ip(src) and self._is_home_ip(dst_ip):
                 if dst_port in LATERAL_PORTS:
                     if dst_ip not in self.safe_ips and src not in self.safe_ips:
@@ -331,7 +334,8 @@ class ZeekFeatureExtractor:
                         self._lateral_moves[dst_ip].append((ts, src, dst_port))
                         self._new_lateral_events[dst_ip].append((src, dst_port))
 
-            if not self._is_home_ip(src) and not self._is_home_ip(dst_ip):
+            # FIX: Properly evaluates if the connection is outbound from the local device
+            if self._is_home_ip(src) and not self._is_home_ip(dst_ip):
                 if len(self._new_ips[src]) < 1000:
                     self._new_ips[src][dst_ip] = ts
                 if (dst_ip in DOH_IPS and dst_port == 443) or dst_port == 853:
@@ -371,21 +375,36 @@ class ZeekFeatureExtractor:
 
     def _process_ssl(self, src: str, ev: dict) -> None:
         ja3 = ev.get("ja3", "")
+        ja4 = ev.get("ja4", "")
         ts = ev.get("ts", time.time())
-        is_malicious = False
+        is_malicious_ja3 = False
+        is_malicious_ja4 = False
+        
         if ja3:
             if ja3 in self._MALICIOUS_JA3:
-                is_malicious = True
+                is_malicious_ja3 = True
             elif self.ti_engine and hasattr(self.ti_engine, "dynamic_ja3") and ja3 in self.ti_engine.dynamic_ja3:
-                is_malicious = True
+                is_malicious_ja3 = True
                 
-        if is_malicious:
+        if ja4 and ja4 in self._MALICIOUS_JA4:
+            is_malicious_ja4 = True
+                
+        if is_malicious_ja3:
             dst_port = ev.get("id.resp_p", ev.get("resp_p", 0)) 
             self._ja3_hits[src].append({
                 "ja3": ja3,
                 "server": ev.get("server_name", ""),
                 "ts": ts,
                 "dest_port": dst_port 
+            })
+            
+        if is_malicious_ja4:
+            dst_port = ev.get("id.resp_p", ev.get("resp_p", 0))
+            self._ja4_hits[src].append({
+                "ja4": ja4,
+                "server": ev.get("server_name", ""),
+                "ts": ts,
+                "dest_port": dst_port
             })
             
         if str(ev.get("server_name", "")).lower() in DOH_SNIS:
@@ -421,6 +440,7 @@ class ZeekFeatureExtractor:
             "zeek_conn_count": len(self._conn_ts.get(device_ip, [])),
             "zeek_new_ips": len(self._new_ips.get(device_ip, {})),
             "zeek_ja3_malicious": len(self._ja3_hits.get(device_ip, [])),
+            "zeek_ja4_malicious": len(self._ja4_hits.get(device_ip, [])),
             "zeek_notices": len(self._notices.get(device_ip, [])),
             "zeek_susp_ports": len(self._susp_ports.get(device_ip, [])),
             "zeek_http_ua_count": len(self._http_uas.get(device_ip, {})),
@@ -428,21 +448,25 @@ class ZeekFeatureExtractor:
             "zeek_doh_bypass": len(self._doh_bypass_uids.get(device_ip, {})),
             "zeek_lateral_moves": len(self._lateral_moves.get(device_ip, [])),
             "zeek_s0_rej_count": s0_rej_count,     
-            "zeek_max_duration": max_duration      
+            "zeek_max_duration": max_duration,
+            "zeek_honeypot_hits": len(self._honeypot_hits.get(device_ip, []))
         }
 
     def get_alerts(self, device_ip: str) -> list[dict]:
         alerts = []
         for h in self._ja3_hits.get(device_ip, []):
             alerts.append({"type": "malicious_ja3", "ja3": h["ja3"], "dest_port": h.get("dest_port", 0), "confidence": 0.95})
+        for h in self._ja4_hits.get(device_ip, []):
+            alerts.append({"type": "malicious_ja4", "ja4": h["ja4"], "dest_port": h.get("dest_port", 0), "confidence": 0.95})
         for n in self._notices.get(device_ip, []):
             alerts.append({"type": "zeek_notice", "note": n["note"], "msg": n["msg"], "dest_port": n.get("dest_port", 0), "confidence": 0.75})
         return alerts
 
     def reset_all(self) -> None:
-        for d in (self._conn_ts, self._new_ips, self._ja3_hits, self._notices, 
+        for d in (self._conn_ts, self._new_ips, self._ja3_hits, self._ja4_hits, self._notices, 
                   self._susp_ports, self._http_uas, self._http_reqs, self._outbound_bytes, 
-                  self._doh_bypass_uids, self._lateral_moves, self._conn_states, self._conn_durations, self._new_lateral_events):
+                  self._doh_bypass_uids, self._lateral_moves, self._conn_states, 
+                  self._conn_durations, self._new_lateral_events, self._honeypot_hits):
             d.clear()
         if len(self._wire_dns_resolutions) > 10000:
             self._wire_dns_resolutions.clear()

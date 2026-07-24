@@ -10,6 +10,7 @@ RECENT FIXES:
 - FIXED: Added a JSON structure flattener. Allows config.json to be organized into 
   'static_requires_restart' and 'dynamic_live_reload' blocks for user clarity, 
   while keeping the internal Python dictionary flat for backward compatibility.
+- ADDED (SOC): Integrated 'honeypot_ips' into the dynamic config reload path.
 """
 import json
 import os
@@ -21,7 +22,6 @@ from pathlib import Path
 LOGGER = logging.getLogger("home_ids.config")
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
-# systemd Environment= overrides (see myscript.service) — env wins over config.json
 _ENV_OVERRIDES = {
     "IDS_TELEGRAM_TOKEN":     "telegram_token",
     "IDS_TELEGRAM_CHAT_ID":   "telegram_chat_id",
@@ -48,7 +48,6 @@ def apply_env_overrides(config: dict) -> None:
         if val:
             config[cfg_key] = val
             
-    # Auto-enable IPS if the environment flag is passed
     ips_flag = os.environ.get("IDS_IPS_ENABLED")
     if ips_flag is not None:
         config["ips_enabled"] = ips_flag.strip().lower() in ("1", "true", "yes", "on")
@@ -81,6 +80,7 @@ DEFAULT_CONFIG = {
     "telegram_token": "",
     "telegram_chat_id": "",
     "safe_ips": ["127.0.0.1"],
+    "honeypot_ips": [],
     "safe_host_patterns": [],
     "device_type_overrides": {},
     "per_device_thresholds": {},
@@ -98,7 +98,6 @@ class LiveConfig:
         self._lock = threading.Lock()
         self._notify_cb = None
         self._last_loaded = 0.0
-        # Ensure environment variables are loaded immediately on boot
         apply_env_overrides(self._config)
         self._load()
 
@@ -108,7 +107,6 @@ class LiveConfig:
             try:
                 self.file_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # Automatically generate the organized structure on first boot
                 structured = {
                     "static_requires_restart": {},
                     "dynamic_live_reload": {}
@@ -129,12 +127,10 @@ class LiveConfig:
             raw = json.loads(self.file_path.read_text())
             flattened = {}
             
-            # Flattens the new grouped structure back into a standard dictionary
             if "static_requires_restart" in raw or "dynamic_live_reload" in raw:
                 flattened.update(raw.get("static_requires_restart", {}))
                 flattened.update(raw.get("dynamic_live_reload", {}))
             else:
-                # Backwards compatibility fallback if the user hasn't migrated their JSON file yet
                 flattened = raw
 
             changed = {}
@@ -145,7 +141,6 @@ class LiveConfig:
                             changed[k] = v
                         self._config[k] = v
                 
-                # Enforce environment overrides over any on-disk JSON modifications
                 apply_env_overrides(self._config)
             
             self._last_loaded = time.time()

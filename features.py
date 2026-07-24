@@ -3,6 +3,11 @@ features.py – Per-device DNS feature extraction.
 
 Computes metrics over the specified lookback window, tracks algorithmic entropy, 
 and measures standard coefficients of variation to surface mechanical timing blocks.
+
+RECENT FIXES:
+- FIXED (CRITICAL): Synchronized the `rw.events` popleft() loop with `rw.domains` 
+  to prevent defaultdict from spawning artificial negative counts (-1) when 
+  processing orphaned events that were truncated by DGA RAM capping.
 """
 from collections import Counter
 import math
@@ -14,15 +19,7 @@ NXDOMAIN = frozenset({3, 12, 13})
 
 _DEFAULT_DECAY_FACTOR = 0.995
 
-
 def _decay_rate_per_second() -> float:
-    """
-    Converts the configured per-poll-cycle decay_factor into a continuous
-    per-second decay rate, so domain weight can be decayed against any
-    elapsed wall-clock gap rather than assuming a fixed tick count.
-    decay_factor=0.995 with the default poll_interval=2.0s yields a half-life
-    of ln(0.5)/ln(0.995) ~= 138.3 cycles * 2s ~= 4.6 minutes.
-    """
     decay_factor = CONFIG.get("decay_factor", _DEFAULT_DECAY_FACTOR)
     poll_interval = CONFIG.get("poll_interval", 2.0)
     try:
@@ -31,7 +28,7 @@ def _decay_rate_per_second() -> float:
     except (TypeError, ValueError):
         return 1.0
     if not (0.0 < decay_factor < 1.0) or poll_interval <= 0:
-        return 1.0  # invalid config -> no decay, falls back to legacy flat-count behavior
+        return 1.0  
     return decay_factor ** (1.0 / poll_interval)
 
 class FeatureExtractor:
@@ -46,9 +43,11 @@ class FeatureExtractor:
             if status in NXDOMAIN:
                 rw.nxdomain = max(rw.nxdomain - 1, 0)
             
-            rw.domains[domain] -= 1
-            if rw.domains[domain] <= 0:
-                del rw.domains[domain]
+            # FIX: Prevent orphaned events from corrupting domain matrices with negative counts
+            if domain in rw.domains:
+                rw.domains[domain] -= 1
+                if rw.domains[domain] <= 0:
+                    del rw.domains[domain]
                 
             if domain in rw.domain_timestamps:
                 while rw.domain_timestamps[domain] and rw.domain_timestamps[domain][0] < now - window_seconds:
@@ -79,12 +78,8 @@ class FeatureExtractor:
             if len(parts) > 5:
                 deep_domains += 1
                 
-            # Perform time-delta evaluation to build Jitter metrics
             t_list = list(rw.domain_timestamps.get(domain, []))
 
-            # Decayed concentration weight: recent queries to this domain count
-            # close to full weight, older ones (within the same hard window)
-            # fade out with a ~4.6min half-life instead of all counting equally.
             weight = sum(decay_rate ** max(0.0, now - t) for t in t_list)
             decayed_weights[domain] = weight
             decayed_total += weight
@@ -96,7 +91,6 @@ class FeatureExtractor:
                     var_delta = sum((d - mean_delta) ** 2 for d in deltas) / len(deltas)
                     cv = math.sqrt(var_delta) / mean_delta
                     min_jitter_cv = min(min_jitter_cv, cv)
-                    # Coefficient of Variation < 0.1 reveals strict mechanical timing
                     if cv < 0.1:
                         beaconing_c2_count += 1
 

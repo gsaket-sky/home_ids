@@ -8,6 +8,7 @@ RECENT FIXES:
 - Removed orphaned per_device_threshold_metric variable.
 - ADDED (NDR): Added gauges for TCP port scans (S0/REJ) and max session durations.
 - ADDED (NDR): Added enriched counter for internal lateral movement mapping (src, dst, port).
+- ADDED (SOC): Added gauges for JA4+ Next-Gen Fingerprinting, Internal Honeypot Deception hits, and Markov Sequence Anomalies.
 """
 from prometheus_client import Gauge, Counter
 
@@ -28,6 +29,7 @@ suspicious_domains_metric = Gauge("home_ids_suspicious_domains", "Suspicious/DGA
 # ML & MACHINE CONTEXT REGISTRIES
 # =============================================================================
 ml_anomaly_metric = Gauge("home_ids_ml_anomaly_score", "IsolationForest anomaly score", _DEV_LABELS)
+markov_anomaly_metric = Gauge("home_ids_markov_anomaly_score", "Markov chain state transition anomaly score", _DEV_LABELS)
 zscore_query_metric = Gauge("home_ids_zscore_query_rate", "Query-rate z-score", _DEV_LABELS)
 zscore_entropy_metric = Gauge("home_ids_zscore_entropy", "Entropy z-score", _DEV_LABELS)
 zscore_unique_metric = Gauge("home_ids_zscore_unique_domains", "Unique-domain z-score", _DEV_LABELS)
@@ -84,6 +86,7 @@ baseline_poisoned_metric = Gauge("home_ids_baseline_poisoned", "Baseline update 
 zeek_conn_count_metric = Gauge("home_ids_zeek_conn_count", "Total TCP/UDP connections seen by Zeek", _DEV_LABELS)
 zeek_new_ips_metric = Gauge("home_ids_zeek_new_ips", "Unique destination IPs seen via Zeek", _DEV_LABELS)
 zeek_ja3_metric = Gauge("home_ids_zeek_ja3_malicious", "Malicious JA3 TLS fingerprint hits", _DEV_LABELS)
+zeek_ja4_metric = Gauge("home_ids_zeek_ja4_malicious", "Malicious JA4+ TLS fingerprint hits", _DEV_LABELS)
 zeek_notices_metric = Gauge("home_ids_zeek_notices", "Zeek notice events for this device", _DEV_LABELS)
 zeek_susp_ports_metric = Gauge("home_ids_zeek_suspicious_ports", "Outbound connections to suspicious ports", _DEV_LABELS)
 query_rate_baseline_mean_metric = Gauge("home_ids_query_rate_baseline_mean", "Per-device query rate moving average baseline", _DEV_LABELS)
@@ -99,8 +102,9 @@ beaconing_volume_metric = Gauge("home_ids_beaconing_volume_score", "Single-desti
 jitter_cv_metric = Gauge("home_ids_jitter_cv_score", "Timing uniformity coefficient of variation", _DEV_LABELS)
 
 # =============================================================================
-# NEW NDR ENRICHED METRICS
+# NEW NDR & SOC ENRICHED METRICS
 # =============================================================================
 ndr_tcp_scan_metric = Gauge("home_ids_zeek_s0_rej_count", "Rejected or unanswered TCP connection attempts (Port Scans)", _DEV_LABELS)
 ndr_max_duration_metric = Gauge("home_ids_zeek_max_duration", "Maximum continuous connection session duration in seconds", _DEV_LABELS)
+ndr_honeypot_hits_metric = Gauge("home_ids_zeek_honeypot_hits", "Connections to internal deception honeypots", _DEV_LABELS)
 ndr_lateral_targets_total = Counter("home_ids_zeek_lateral_targets_total", "Internal lateral movement targets broken down by source, target IP, and port", ["device", "hostname", "src_ip", "dst_ip", "dst_port"])
